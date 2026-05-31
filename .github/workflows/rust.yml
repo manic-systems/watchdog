@@ -1,0 +1,50 @@
+name: Build & Test with Rust
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rust.yml'
+      - 'config.example.toml'
+      - 'testdata/**'
+      - 'web/**'
+
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/rust.yml'
+      - 'config.example.toml'
+      - 'testdata/**'
+      - 'web/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run tests
+        run: cargo test --locked --all-targets
+
+      - name: Run clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --locked --release

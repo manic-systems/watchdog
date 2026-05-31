@@ -1,4 +1,4 @@
-inputs: {
+self: {
   config,
   pkgs,
   lib,
@@ -8,7 +8,8 @@ inputs: {
   inherit (lib.options) mkOption mkEnableOption mkPackageOption;
   inherit (lib.types) str path bool;
 
-  settingsType = (pkgs.formats.yaml {}).type;
+  settingsFormat = pkgs.formats.toml {};
+  settingsType = settingsFormat.type;
 
   cfg = config.services.watchdog;
 in {
@@ -17,7 +18,7 @@ in {
   options.services.watchdog = {
     enable = mkEnableOption "Watchdog privacy-preserving analytics";
 
-    package = mkPackageOption inputs.self.packages.${pkgs.stdenv.hostPlatform.system} "watchdog" {
+    package = mkPackageOption self.packages.${pkgs.stdenv.hostPlatform.system} "watchdog" {
       pkgsText = "self.packages.\${pkgs.stdenv.hostPlatform.system}";
     };
 
@@ -25,13 +26,13 @@ in {
       type = settingsType;
       default = {};
       description = ''
-        Configuration for Watchdog analytics.
+        TOML configuration for Watchdog analytics.
 
         See <https://github.com/notashelf/watchdog> for available options.
       '';
       example = {
         site = {
-          domain = "example.com";
+          domains = ["example.com"];
           salt_rotation = "daily";
           sampling = 1.0;
           collect = {
@@ -106,7 +107,14 @@ in {
   };
 
   config = mkIf cfg.enable {
-    systemd.services.watchdog = {
+    systemd.services.watchdog = let
+      settings =
+        lib.recursiveUpdate {
+          server.state_path = "${cfg.stateDir}/hll.state";
+        }
+        cfg.settings;
+      configFile = settingsFormat.generate "watchdog.toml" settings;
+    in {
       description = "Watchdog Privacy Analytics";
       wantedBy = ["multi-user.target"];
       after = ["network-online.target"];
@@ -117,7 +125,7 @@ in {
         User = cfg.user;
         Group = cfg.group;
 
-        ExecStart = "${lib.getExe cfg.package} -config ${settingsType.generate "config.yaml" cfg.settings}";
+        ExecStart = "${lib.getExe cfg.package} --config ${configFile}";
 
         Restart = "on-failure";
         RestartSec = "5s";

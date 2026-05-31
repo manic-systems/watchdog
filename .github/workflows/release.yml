@@ -9,40 +9,43 @@ jobs:
   build:
     strategy:
       matrix:
-        goos: [linux, darwin, freebsd]
-        goarch: [amd64, arm64]
+        include:
+          - target: x86_64-unknown-linux-gnu
+            archive: watchdog-linux-amd64
+          - target: aarch64-unknown-linux-gnu
+            archive: watchdog-linux-arm64
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v6
 
-      - name: Set up Go
-        uses: actions/setup-go@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          go-version-file: go.mod
-          cache: true
+          targets: ${{ matrix.target }}
 
       - name: Build
+        uses: houseabsolute/actions-rust-cross@v1
         env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
-        run: |
-          go build \
-            -ldflags="-s -w -X main.Version=${{ github.ref_name }} -X main.Commit=${{ github.sha }}" -o watchdog-${GOOS}-${GOARCH} .
+          WATCHDOG_COMMIT: ${{ github.sha }}
+          WATCHDOG_BUILD_DATE: ${{ github.event.repository.updated_at }}
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          args: "--locked --release"
+          strip: true
 
       - name: Create artifact
         run: |
-            tar -czvf watchdog-${GOOS}-${{ matrix.goarch }}.tar.gz watchdog-${GOOS}-${{ matrix.goarch }}
-        env:
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
+          cp target/${{ matrix.target }}/release/watchdog ${{ matrix.archive }}
+          tar -czvf ${{ matrix.archive }}.tar.gz ${{ matrix.archive }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: watchdog-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: watchdog-*
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}.tar.gz
 
   release:
     needs: build

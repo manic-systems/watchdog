@@ -1,18 +1,28 @@
 {
   mkShell,
-  go,
-  gopls,
-  golines,
-  delve,
-  golangci-lint,
+  cargo,
+  lld,
+  rust-analyzer,
+  rustc,
+  rustfmt,
+  clippy,
+  cargo-audit,
+  cargo-nextest,
 }:
 mkShell {
-  name = "go";
-  packages = [
-    go
-    gopls # formatter
-    golines # line wrapper
-    delve # debugger
-    golangci-lint # linter
+  name = "watchdog";
+  strictDeps = true;
+  nativeBuildInputs = [
+    cargo
+    rustc
+    lld
+
+    clippy
+    rust-analyzer
+    rustfmt
+
+    # Additional Cargo Tooling
+    cargo-audit
+    cargo-nextest
   ];
 }

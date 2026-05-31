@@ -1,10 +1,10 @@
 {
   lib,
-  buildGoModule,
+  rustPlatform,
 }: let
   versionInfo = lib.importJSON ../version.json;
 in
-  buildGoModule (finalAttrs: {
+  rustPlatform.buildRustPackage {
     pname = "watchdog";
     version = versionInfo.version;
 
@@ -15,35 +15,19 @@ in
       fs.toSource {
         root = s;
         fileset = fs.unions [
-          (s + /cmd)
-          (s + /internal)
+          (s + /src)
           (s + /web)
-
-          (s + /go.mod)
-          (s + /go.sum)
-
-          # Checkphase
-          (s + /test)
-          (s + /testdata)
-          (s + /version.json)
+          (s + /Cargo.toml)
+          (s + /Cargo.lock)
         ];
       };
 
-    vendorHash = "sha256-778YiWvdfdFtUrEiYLhBONSxjK6caq16LXxQcsHM3Mw=";
+    cargoLock.lockFile = ../Cargo.lock;
 
-    ldflags = [
-      "-s"
-      "-w"
-      "-X main.Version=${finalAttrs.version}"
-      "-X main.Commit=${versionInfo.commit}"
-      "-X main.BuildDate=${versionInfo.buildDate}"
-    ];
-
-    # Copy web assets
-    postInstall = ''
-      mkdir -p $out/share/watchdog
-      cp -r $src/web $out/share/watchdog/
-    '';
+    env = {
+      WATCHDOG_COMMIT = versionInfo.commit;
+      WATCHDOG_BUILD_DATE = versionInfo.buildDate;
+    };
 
     meta = {
       description = "Privacy-preserving web analytics with Prometheus-native metrics";
@@ -52,4 +36,4 @@ in
       maintainers = with lib.maintainers; [NotAShelf];
       mainProgram = "watchdog";
     };
-  })
+  }
