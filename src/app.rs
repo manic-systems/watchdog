@@ -44,6 +44,7 @@ use crate::{
 #[folder = "web"]
 struct WebAssets;
 
+/// Errors returned while constructing application state or routes.
 #[derive(Debug, Error)]
 pub enum AppError {
   #[error("failed to initialize metrics: {0}")]
@@ -57,6 +58,7 @@ pub enum AppError {
   },
 }
 
+/// Shared application state used by HTTP handlers.
 #[derive(Clone)]
 pub struct AppState {
   inner: Arc<AppStateInner>,
@@ -80,6 +82,7 @@ struct AppStateInner {
 }
 
 impl AppState {
+  /// Builds application state from validated configuration and build metadata.
   pub fn new(config: Config, build_info: BuildInfo) -> Result<Self, AppError> {
     let allowed_domains = config.site.domains.iter().cloned().collect();
     let allowed_events = config
@@ -120,18 +123,22 @@ impl AppState {
     })
   }
 
+  /// Returns the runtime configuration backing this state.
   pub fn config(&self) -> &Config {
     &self.inner.config
   }
 
+  /// Returns the shared metrics registry.
   pub fn metrics(&self) -> Arc<Metrics> {
     self.inner.metrics.clone()
   }
 
+  /// Returns the path used for persisted unique visitor state.
   pub fn state_path(&self) -> &Path {
     Path::new(&self.inner.config.server.state_path)
   }
 
+  /// Restores persisted unique visitor state when unique tracking is enabled.
   pub async fn load_state(
     &self,
   ) -> Result<(), crate::uniques::UniqueStateError> {
@@ -141,6 +148,7 @@ impl AppState {
     Ok(())
   }
 
+  /// Persists unique visitor state when unique tracking is enabled.
   pub async fn save_state(
     &self,
   ) -> Result<(), crate::uniques::UniqueStateError> {
@@ -189,6 +197,7 @@ impl AppState {
   }
 }
 
+/// Builds the Axum router for ingestion, metrics, health, and embedded assets.
 pub fn router(state: AppState) -> Result<Router, AppError> {
   let ingestion_path = state.config().server.ingestion_path.clone();
   let metrics_path = state.config().server.metrics_path.clone();
@@ -499,8 +508,10 @@ fn bounded_dimension(
   fallback: &'static str,
 ) -> String {
   let value = value
-    .map(|value| sanitize_label(value.trim()))
-    .filter(|value| !value.is_empty())
+    .and_then(|value| {
+      let value = value.trim();
+      (!value.is_empty()).then(|| sanitize_label(value))
+    })
     .unwrap_or_else(|| fallback.to_owned());
 
   if matches!(
@@ -567,12 +578,8 @@ fn query_string(input: &str) -> Option<String> {
     return url.query().map(str::to_owned);
   }
 
-  input.split_once('?').map(|(_, query)| {
-    query
-      .split_once('#')
-      .map_or(query, |(query, _)| query)
-      .to_owned()
-  })
+  let path = input.split_once('#').map_or(input, |(path, _)| path);
+  path.split_once('?').map(|(_, query)| query.to_owned())
 }
 
 fn set_once(target: &mut Option<String>, value: &str) {
@@ -934,7 +941,10 @@ fn validate_asset_path(path: &str) -> Result<(), &'static str> {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::config::DeviceBreakpoints;
+  use crate::{
+    BuildInfo,
+    config::{Config, DeviceBreakpoints},
+  };
 
   #[test]
   fn classifies_devices() {
@@ -965,6 +975,23 @@ mod tests {
     assert_eq!(labels.utm_medium, Some("email".to_owned()));
     assert_eq!(labels.click_id, Some("gclid".to_owned()));
     assert_eq!(labels.referrer_source, Some("ycombinator.com".to_owned()));
+
+    let fragment_only =
+      acquisition_labels("/docs#utm_source=fragment", "", "example.com");
+    assert_eq!(fragment_only.utm_source, None);
+  }
+
+  #[test]
+  fn bounded_dimension_uses_fallback_for_blank_values() {
+    let mut config = Config::default();
+    config.site.domains = vec!["example.com".to_owned()];
+    config.validate().unwrap();
+    let state = AppState::new(config, BuildInfo::current()).unwrap();
+
+    assert_eq!(
+      bounded_dimension(&state, "utm_source", Some("  ".to_owned()), "none"),
+      "none"
+    );
   }
 
   #[test]

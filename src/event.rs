@@ -14,6 +14,7 @@ use crate::limits::{
   MAX_WIDTH,
 };
 
+/// Validation errors for incoming analytics events.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum EventError {
   #[error("domain required")]
@@ -36,6 +37,10 @@ pub enum EventError {
   InvalidScrollDepth,
 }
 
+/// Incoming browser analytics event payload.
+///
+/// Fields use compact JSON names to keep beacon payloads small while accepting
+/// both Watchdog and Plausible-style shapes.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Event {
   #[serde(default, rename = "d")]
@@ -63,10 +68,12 @@ pub struct Event {
 enum PayloadField {
   Path(String),
   Properties(BTreeMap<String, EventProperty>),
+  Null(()),
   #[default]
   Empty,
 }
 
+/// Supported custom property values in event payloads.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 pub enum EventProperty {
@@ -77,6 +84,7 @@ pub enum EventProperty {
 }
 
 impl EventProperty {
+  /// Converts the property value into a Prometheus label candidate.
   pub fn label_value(&self) -> String {
     match self {
       Self::String(value) => value.trim().to_owned(),
@@ -98,6 +106,8 @@ enum EngagementOrLegacyEvent {
 }
 
 impl Event {
+  /// Returns the event domain, falling back to the host from `u` when `d` is
+  /// absent.
   pub fn normalize_domain(&self) -> String {
     let domain = self
       .domain
@@ -117,6 +127,7 @@ impl Event {
       .to_ascii_lowercase()
   }
 
+  /// Returns the reported path, falling back to the parsed URL path.
   pub fn path(&self) -> String {
     if let PayloadField::Path(path) = &self.payload
       && !path.trim().is_empty()
@@ -140,14 +151,17 @@ impl Event {
     self.url.trim().to_owned()
   }
 
+  /// Returns the raw referrer string from the payload.
   pub fn referrer(&self) -> &str {
     &self.referrer
   }
 
+  /// Returns the raw page URL string from the payload.
   pub fn url(&self) -> &str {
     &self.url
   }
 
+  /// Returns the normalized event name, including the legacy string `e` field.
   pub fn event_name(&self) -> String {
     let name = self.name.trim();
     if !name.is_empty() {
@@ -161,10 +175,11 @@ impl Event {
     }
   }
 
+  /// Returns positive engagement duration reported in seconds.
   pub fn engagement_seconds(&self) -> Option<f64> {
-    match self.engagement_or_legacy_event {
-      EngagementOrLegacyEvent::Engagement(seconds) if seconds > 0.0 => {
-        Some(seconds)
+    match &self.engagement_or_legacy_event {
+      EngagementOrLegacyEvent::Engagement(seconds) if *seconds > 0.0 => {
+        Some(*seconds)
       },
       EngagementOrLegacyEvent::Engagement(_)
       | EngagementOrLegacyEvent::LegacyEvent(_)
@@ -172,18 +187,22 @@ impl Event {
     }
   }
 
+  /// Returns the reported viewport width in CSS pixels, or zero when absent.
   pub fn width(&self) -> u16 {
     self.width
   }
 
+  /// Returns the reported scroll depth percentage.
   pub fn scroll_depth(&self) -> u8 {
     self.scroll_depth
   }
 
+  /// Returns whether the browser reported a new tab-local session.
   pub fn is_new_session(&self) -> bool {
     self.new_session
   }
 
+  /// Returns custom properties after trimming and applying per-label bounds.
   pub fn properties(&self) -> BTreeMap<String, String> {
     match &self.payload {
       PayloadField::Properties(properties) => {
@@ -208,10 +227,13 @@ impl Event {
           .filter(|(key, value)| !key.is_empty() && !value.is_empty())
           .collect()
       },
-      PayloadField::Path(_) | PayloadField::Empty => BTreeMap::new(),
+      PayloadField::Path(_) | PayloadField::Null(()) | PayloadField::Empty => {
+        BTreeMap::new()
+      },
     }
   }
 
+  /// Checks domain authorization and payload bounds before ingestion.
   pub fn validate(
     &self,
     domain_allowed: impl FnOnce(&str) -> bool,
@@ -241,8 +263,8 @@ impl Event {
       return Err(EventError::InvalidWidth);
     }
     if let EngagementOrLegacyEvent::Engagement(seconds) =
-      self.engagement_or_legacy_event
-      && (!seconds.is_finite() || seconds > MAX_ENGAGEMENT_SECONDS)
+      &self.engagement_or_legacy_event
+      && (!seconds.is_finite() || *seconds > MAX_ENGAGEMENT_SECONDS)
     {
       return Err(EventError::InvalidEngagement);
     }
@@ -327,6 +349,22 @@ mod tests {
     assert!(event.validate(|domain| domain == "example.com").is_ok());
     assert!(!event.properties().contains_key("empty"));
     assert_eq!(event.properties().get("plan"), Some(&"pro".to_owned()));
+  }
+
+  #[test]
+  fn treats_null_property_payload_as_missing_payload() {
+    let event: Event = serde_json::from_str(
+      r#"{
+                "d": "example.com",
+                "u": "https://example.com/docs?utm_source=newsletter",
+                "p": null
+            }"#,
+    )
+    .unwrap();
+
+    assert!(event.validate(|domain| domain == "example.com").is_ok());
+    assert_eq!(event.path(), "/docs?utm_source=newsletter");
+    assert!(event.properties().is_empty());
   }
 
   #[test]
