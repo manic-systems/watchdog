@@ -1,23 +1,13 @@
 # Binaries
 /watchdog
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+/target/
 
-# Test coverage
-*.out
-coverage.html
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
+# Nix
+/result*
+/.direnv
 
 # Config
-config.local.yaml
+config.local.toml
 
 # Data
 *.mmdb
