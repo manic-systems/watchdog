@@ -83,14 +83,27 @@ custom_events = ["signup", "purchase"]
 ```toml
 [site.collect]
 pageviews = true
+sessions = true
+engagement = true
 country = false
 device = true
+browser = false
+os = false
+screen = false
 referrer = "domain" # "off", "domain", or "url"
+acquisition = false
+properties = false
 domain = false
 ```
 
 `country = true` currently emits the `country="unknown"` label. It is retained
 as a stable configuration surface for future GeoIP enrichment.
+
+`sessions` counts client-reported session starts without storing or exporting a
+session identifier. `engagement` enables aggregate engagement seconds and scroll
+depth buckets. `acquisition` adds UTM labels, click-id parameter names, and
+referrer-source labels behind `limits.max_dimension_values`. `properties`
+records bounded custom properties as `key`/`value` labels.
 
 ### Path Normalization
 
@@ -110,6 +123,9 @@ normalize_trailing_slash = true
 max_paths = 10000
 max_sources = 500
 max_custom_events = 100
+max_dimension_values = 1000
+max_property_keys = 50
+max_property_values = 500
 max_events_per_minute = 10000
 max_metrics_per_minute = 60
 
