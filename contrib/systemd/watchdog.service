@@ -9,7 +9,7 @@ Type=simple
 User=watchdog
 Group=watchdog
 
-ExecStart=watchdog -config /etc/watchdog/config.yaml
+ExecStart=watchdog --config /etc/watchdog/config.toml
 
 Restart=on-failure
 RestartSec=5s

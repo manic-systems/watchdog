@@ -1,0 +1,59 @@
+# Watchdog Analytics Configuration Example
+
+[site]
+# Domains to track. This is the only required setting.
+domains = ["example.com"]
+
+# Salt rotation for privacy-preserving unique visitor estimates.
+# Options: "daily", "hourly". Omit or set to no value to disable uniques.
+salt_rotation = "daily"
+
+# Sampling rate from 0.0 to 1.0. 1.0 tracks all accepted traffic.
+sampling = 1.0
+
+# Optional allow-list of custom events. Leave empty to allow any event name up to
+# limits.max_custom_events.
+custom_events = ["signup", "purchase", "download"]
+
+[site.collect]
+pageviews = true
+country = false
+device = true
+referrer = "domain" # "off", "domain", or "url"
+domain = false      # Set true for multi-site metrics.
+
+[site.path]
+strip_query = true
+strip_fragment = true
+collapse_numeric_segments = true
+max_segments = 5
+normalize_trailing_slash = true
+
+[limits]
+max_paths = 10000
+max_sources = 500
+max_custom_events = 100
+max_events_per_minute = 10000
+max_metrics_per_minute = 60
+
+[limits.device_breakpoints]
+mobile = 768
+tablet = 1024
+
+[security]
+trusted_proxies = ["127.0.0.1", "10.0.0.0/8"]
+
+[security.cors]
+enabled = false
+allowed_origins = ["*"]
+
+[security.metrics_auth]
+enabled = false
+username = "admin"
+password = "changeme"
+
+[server]
+listen_addr = "127.0.0.1:8080"
+metrics_path = "/metrics"
+ingestion_path = "/api/event"
+state_path = "/var/lib/watchdog/hll.state"
