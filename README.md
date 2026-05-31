@@ -101,14 +101,24 @@ salt_rotation = "daily"
 
 [site.collect]
 pageviews = true
+sessions = true
+engagement = true
 device = true
+browser = false
+os = false
+screen = false
 referrer = "domain"
+acquisition = false
+properties = false
 domain = false # Set to true for multi-site analytics
 
 [limits]
 max_paths = 10000
 max_sources = 500
 max_custom_events = 100
+max_dimension_values = 1000
+max_property_keys = 50
+max_property_values = 500
 max_events_per_minute = 10000
 
 [server]
@@ -172,6 +182,9 @@ window.watchdog.track("signup");
 // Event with custom referrer
 window.watchdog.track("purchase", { referrer: "email-campaign" });
 
+// Event with bounded custom properties
+window.watchdog.track("purchase", { props: { plan: "pro" } });
+
 // Manual pageview (when data-manual is set)
 window.watchdog.trackPageview();
 
@@ -199,7 +212,13 @@ While not final, some of the metrics collected are as follows:
 
 - `web_pageviews_total{path,device,referrer,domain}` - Total pageviews
   - `domain` label only present if `site.collect.domain: true`
+- `web_events_total{event,path,...}` - Non-pageview event counts with enabled
+  dimensions
 - `web_custom_events_total{event}` - Custom event counts
+- `web_sessions_total{path,...}` - Client-reported session starts
+- `web_engagement_seconds_total{path,...}` - Aggregate active engagement time
+- `web_scroll_depth_total{path,depth,...}` - Scroll-depth reports
+- `web_custom_properties_total{event,key,value}` - Bounded custom properties
 - `web_daily_unique_visitors` - Estimated unique visitors (HyperLogLog)
 
 **Cardinality metrics:**
@@ -207,6 +226,8 @@ While not final, some of the metrics collected are as follows:
 - `web_path_overflow_total` - Paths rejected due to cardinality limit
 - `web_referrer_overflow_total` - Referrers rejected due to limit
 - `web_event_overflow_total` - Custom events rejected due to limit
+- `web_dimension_overflow_total{dimension}` - Rich dimensions collapsed due to
+  limit
 - `web_blocked_requests_total{reason}` - File server requests blocked by
   security filters
 
