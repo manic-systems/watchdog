@@ -1,5 +1,5 @@
 [site]
-domains = []
+domains = [  ]
 
 [limits]
 max_paths = 0

@@ -10,16 +10,16 @@ pub mod uniques;
 
 #[derive(Debug, Clone)]
 pub struct BuildInfo {
-  pub version: String,
-  pub commit: String,
+  pub version:    String,
+  pub commit:     String,
   pub build_date: String,
 }
 
 impl BuildInfo {
   pub fn current() -> Self {
     Self {
-      version: env!("CARGO_PKG_VERSION").to_owned(),
-      commit: option_env!("WATCHDOG_COMMIT")
+      version:    env!("CARGO_PKG_VERSION").to_owned(),
+      commit:     option_env!("WATCHDOG_COMMIT")
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown")
         .to_owned(),

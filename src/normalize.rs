@@ -122,7 +122,7 @@ impl ReferrerHostClassification {
 }
 
 struct ReferrerHost {
-  hostname: String,
+  hostname:       String,
   classification: ReferrerHostClassification,
 }
 
@@ -132,7 +132,7 @@ fn normalized_referrer_host(
 ) -> Option<ReferrerHost> {
   if referrer.is_empty() {
     return Some(ReferrerHost {
-      hostname: String::new(),
+      hostname:       String::new(),
       classification: ReferrerHostClassification::Direct,
     });
   }
