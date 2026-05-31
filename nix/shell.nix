@@ -19,7 +19,7 @@ mkShell {
 
     clippy
     rust-analyzer
-    rustfmt
+    (rustfmt.override {asNightly = true;})
 
     # Additional Cargo Tooling
     cargo-audit
