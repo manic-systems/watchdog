@@ -5,8 +5,13 @@ use thiserror::Error;
 use url::Url;
 
 use crate::limits::{
-  MAX_ENGAGEMENT_SECONDS, MAX_EVENT_NAME_LEN, MAX_PATH_LEN,
-  MAX_PROPERTY_KEY_LEN, MAX_PROPERTY_VALUE_LEN, MAX_REFERRER_LEN, MAX_WIDTH,
+  MAX_ENGAGEMENT_SECONDS,
+  MAX_EVENT_NAME_LEN,
+  MAX_PATH_LEN,
+  MAX_PROPERTY_KEY_LEN,
+  MAX_PROPERTY_VALUE_LEN,
+  MAX_REFERRER_LEN,
+  MAX_WIDTH,
 };
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -34,23 +39,23 @@ pub enum EventError {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Event {
   #[serde(default, rename = "d")]
-  domain: String,
+  domain:                     String,
   #[serde(default, rename = "u")]
-  url: String,
+  url:                        String,
   #[serde(default, rename = "p")]
-  payload: PayloadField,
+  payload:                    PayloadField,
   #[serde(default, rename = "r")]
-  referrer: String,
+  referrer:                   String,
   #[serde(default, rename = "n")]
-  name: String,
+  name:                       String,
   #[serde(default, rename = "e")]
   engagement_or_legacy_event: EngagementOrLegacyEvent,
   #[serde(default, rename = "w")]
-  width: u16,
+  width:                      u16,
   #[serde(default, rename = "sd")]
-  scroll_depth: u8,
+  scroll_depth:               u8,
   #[serde(default, rename = "s")]
-  new_session: bool,
+  new_session:                bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -68,6 +73,7 @@ pub enum EventProperty {
   String(String),
   Number(f64),
   Bool(bool),
+  Null(()),
 }
 
 impl EventProperty {
@@ -77,6 +83,7 @@ impl EventProperty {
       Self::Number(value) if value.fract() == 0.0 => format!("{value:.0}"),
       Self::Number(value) => value.to_string(),
       Self::Bool(value) => value.to_string(),
+      Self::Null(()) => String::new(),
     }
   }
 }
@@ -179,26 +186,28 @@ impl Event {
 
   pub fn properties(&self) -> BTreeMap<String, String> {
     match &self.payload {
-      PayloadField::Properties(properties) => properties
-        .iter()
-        .map(|(key, value)| {
-          let key = key.trim();
-          let value = value.label_value();
-          let value = value.trim();
-          let key = if key.len() > MAX_PROPERTY_KEY_LEN {
-            "other".to_owned()
-          } else {
-            key.to_owned()
-          };
-          let value = if value.len() > MAX_PROPERTY_VALUE_LEN {
-            "other".to_owned()
-          } else {
-            value.to_owned()
-          };
-          (key, value)
-        })
-        .filter(|(key, value)| !key.is_empty() && !value.is_empty())
-        .collect(),
+      PayloadField::Properties(properties) => {
+        properties
+          .iter()
+          .map(|(key, value)| {
+            let key = key.trim();
+            let value = value.label_value();
+            let value = value.trim();
+            let key = if key.len() > MAX_PROPERTY_KEY_LEN {
+              "other".to_owned()
+            } else {
+              key.to_owned()
+            };
+            let value = if value.len() > MAX_PROPERTY_VALUE_LEN {
+              "other".to_owned()
+            } else {
+              value.to_owned()
+            };
+            (key, value)
+          })
+          .filter(|(key, value)| !key.is_empty() && !value.is_empty())
+          .collect()
+      },
       PayloadField::Path(_) | PayloadField::Empty => BTreeMap::new(),
     }
   }
@@ -302,6 +311,22 @@ mod tests {
 
     assert!(event.validate(|domain| domain == "example.com").is_ok());
     assert_eq!(event.properties().get("url"), Some(&"other".to_owned()));
+  }
+
+  #[test]
+  fn ignores_null_property_values() {
+    let event: Event = serde_json::from_str(
+      r#"{
+                "d": "example.com",
+                "u": "https://example.com/",
+                "p": {"empty": null, "plan": "pro"}
+            }"#,
+    )
+    .unwrap();
+
+    assert!(event.validate(|domain| domain == "example.com").is_ok());
+    assert!(!event.properties().contains_key("empty"));
+    assert_eq!(event.properties().get("plan"), Some(&"pro".to_owned()));
   }
 
   #[test]
