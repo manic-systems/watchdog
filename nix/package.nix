@@ -1,12 +1,13 @@
 {
   lib,
   rustPlatform,
+  self,
 }: let
-  versionInfo = lib.importJSON ../version.json;
+  cargoToml = lib.importTOML ../Cargo.toml;
 in
   rustPlatform.buildRustPackage {
     pname = "watchdog";
-    version = versionInfo.version;
+    version = cargoToml.package.version;
 
     src = let
       fs = lib.fileset;
@@ -25,8 +26,8 @@ in
     cargoLock.lockFile = ../Cargo.lock;
 
     env = {
-      WATCHDOG_COMMIT = versionInfo.commit;
-      WATCHDOG_BUILD_DATE = versionInfo.buildDate;
+      WATCHDOG_COMMIT = self.rev or self.dirtyRev or "unknown";
+      WATCHDOG_BUILD_DATE = self.lastModifiedDate or "unknown";
     };
 
     meta = {
