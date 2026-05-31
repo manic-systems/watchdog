@@ -16,7 +16,9 @@
     };
 
     packages = forEachSystem (system: {
-      default = pkgsForEach.${system}.callPackage ./nix/package.nix {};
+      default = pkgsForEach.${system}.callPackage ./nix/package.nix {
+        inherit self;
+      };
     });
 
     devShells = forEachSystem (system: {
@@ -33,7 +35,7 @@
           pkgs.fd
           pkgs.prettier
           pkgs.deno
-          pkgs.rustfmt
+          (pkgs.rustfmt.override {asNightly = true;})
           pkgs.taplo
         ];
 
@@ -41,7 +43,7 @@
           # Format Nix files with Alejandra
           fd "$@" -t f -e nix -x alejandra -q '{}'
 
-          # Format HTML & Javascript files with Prettier
+          # Format HTML & JavaScript files with Prettier
           fd "$@" -t f -e html -e js -x prettier -w '{}'
 
           # Format Markdown with Deno's Markdown formatter
