@@ -9,7 +9,8 @@ use std::{
 };
 
 use axum::{
-  Json, Router,
+  Json,
+  Router,
   body::Body,
   extract::{ConnectInfo, DefaultBodyLimit, Path as AxumPath, State},
   http::{HeaderMap, HeaderValue, Method, StatusCode, header},
@@ -51,7 +52,7 @@ pub enum AppError {
   TrustedProxy { value: String, reason: String },
   #[error("invalid CORS origin {value}: {source}")]
   CorsOrigin {
-    value: String,
+    value:  String,
     source: axum::http::header::InvalidHeaderValue,
   },
 }
@@ -62,20 +63,20 @@ pub struct AppState {
 }
 
 struct AppStateInner {
-  config: Config,
-  allowed_domains: HashSet<String>,
-  allowed_events: HashSet<String>,
-  trusted_proxies: Vec<IpNet>,
-  ingestion_limiter: Option<Arc<DefaultDirectRateLimiter>>,
-  metrics_limiter: Option<Arc<DefaultDirectRateLimiter>>,
-  path_normalizer: PathNormalizer,
-  path_registry: BoundedRegistry,
-  referrer_registry: BoundedRegistry,
-  custom_event_registry: BoundedRegistry,
-  dimension_registry: BoundedRegistry,
-  property_key_registry: BoundedRegistry,
+  config:                  Config,
+  allowed_domains:         HashSet<String>,
+  allowed_events:          HashSet<String>,
+  trusted_proxies:         Vec<IpNet>,
+  ingestion_limiter:       Option<Arc<DefaultDirectRateLimiter>>,
+  metrics_limiter:         Option<Arc<DefaultDirectRateLimiter>>,
+  path_normalizer:         PathNormalizer,
+  path_registry:           BoundedRegistry,
+  referrer_registry:       BoundedRegistry,
+  custom_event_registry:   BoundedRegistry,
+  dimension_registry:      BoundedRegistry,
+  property_key_registry:   BoundedRegistry,
   property_value_registry: BoundedRegistry,
-  metrics: Arc<Metrics>,
+  metrics:                 Arc<Metrics>,
 }
 
 impl AppState {
@@ -396,16 +397,16 @@ fn metric_labels(
   });
 
   DimensionLabels {
-    path: normalized_path,
-    country: collect.country.then(|| "unknown".to_owned()),
-    device: collect.device.then(|| {
+    path:            normalized_path,
+    country:         collect.country.then(|| "unknown".to_owned()),
+    device:          collect.device.then(|| {
       classify_device(
         event.width(),
         user_agent,
         state.config().limits.device_breakpoints,
       )
     }),
-    referrer: referrer_label(state, event.referrer(), event_domain),
+    referrer:        referrer_label(state, event.referrer(), event_domain),
     referrer_source: acquisition.as_ref().map(|labels| {
       bounded_dimension(
         state,
@@ -414,13 +415,13 @@ fn metric_labels(
         "direct",
       )
     }),
-    utm_source: acquisition.as_ref().map(|labels| {
+    utm_source:      acquisition.as_ref().map(|labels| {
       bounded_dimension(state, "utm_source", labels.utm_source.clone(), "none")
     }),
-    utm_medium: acquisition.as_ref().map(|labels| {
+    utm_medium:      acquisition.as_ref().map(|labels| {
       bounded_dimension(state, "utm_medium", labels.utm_medium.clone(), "none")
     }),
-    utm_campaign: acquisition.as_ref().map(|labels| {
+    utm_campaign:    acquisition.as_ref().map(|labels| {
       bounded_dimension(
         state,
         "utm_campaign",
@@ -428,7 +429,7 @@ fn metric_labels(
         "none",
       )
     }),
-    utm_content: acquisition.as_ref().map(|labels| {
+    utm_content:     acquisition.as_ref().map(|labels| {
       bounded_dimension(
         state,
         "utm_content",
@@ -436,13 +437,13 @@ fn metric_labels(
         "none",
       )
     }),
-    utm_term: acquisition.as_ref().map(|labels| {
+    utm_term:        acquisition.as_ref().map(|labels| {
       bounded_dimension(state, "utm_term", labels.utm_term.clone(), "none")
     }),
-    click_id: acquisition.as_ref().map(|labels| {
+    click_id:        acquisition.as_ref().map(|labels| {
       bounded_dimension(state, "click_id", labels.click_id.clone(), "none")
     }),
-    browser: collect.browser.then(|| {
+    browser:         collect.browser.then(|| {
       bounded_dimension(
         state,
         "browser",
@@ -450,10 +451,10 @@ fn metric_labels(
         "unknown",
       )
     }),
-    os: collect.os.then(|| {
+    os:              collect.os.then(|| {
       bounded_dimension(state, "os", Some(classify_os(user_agent)), "unknown")
     }),
-    screen: collect.screen.then(|| {
+    screen:          collect.screen.then(|| {
       bounded_dimension(
         state,
         "screen",
@@ -464,7 +465,7 @@ fn metric_labels(
         "unknown",
       )
     }),
-    domain: collect.domain.then(|| event_domain.to_owned()),
+    domain:          collect.domain.then(|| event_domain.to_owned()),
   }
 }
 
@@ -479,6 +480,7 @@ fn referrer_label(
     ReferrerMode::Url => extract_referrer_url(referrer, event_domain),
   }
   .unwrap_or_else(|| "other".to_owned());
+  let label = sanitize_label(&label);
 
   if matches!(label.as_str(), "direct" | "internal")
     || state.inner.referrer_registry.add(&label)
@@ -520,12 +522,12 @@ fn bounded_dimension(
 #[derive(Default)]
 struct AcquisitionLabels {
   referrer_source: Option<String>,
-  utm_source: Option<String>,
-  utm_medium: Option<String>,
-  utm_campaign: Option<String>,
-  utm_content: Option<String>,
-  utm_term: Option<String>,
-  click_id: Option<String>,
+  utm_source:      Option<String>,
+  utm_medium:      Option<String>,
+  utm_campaign:    Option<String>,
+  utm_content:     Option<String>,
+  utm_term:        Option<String>,
+  click_id:        Option<String>,
 }
 
 fn acquisition_labels(
@@ -854,9 +856,11 @@ fn cors_layer(config: &CorsConfig) -> Result<CorsLayer, AppError> {
       .allowed_origins
       .iter()
       .map(|origin| {
-        HeaderValue::from_str(origin).map_err(|source| AppError::CorsOrigin {
-          value: origin.clone(),
-          source,
+        HeaderValue::from_str(origin).map_err(|source| {
+          AppError::CorsOrigin {
+            value: origin.clone(),
+            source,
+          }
         })
       })
       .collect::<Result<Vec<_>, _>>()?;
@@ -877,15 +881,18 @@ fn parse_trusted_proxies(values: &[String]) -> Result<Vec<IpNet>, AppError> {
         return Ok(network);
       }
 
-      let ip =
-        IpAddr::from_str(value).map_err(|err| AppError::TrustedProxy {
-          value: value.clone(),
+      let ip = IpAddr::from_str(value).map_err(|err| {
+        AppError::TrustedProxy {
+          value:  value.clone(),
           reason: err.to_string(),
-        })?;
+        }
+      })?;
       let prefix_len = if ip.is_ipv4() { 32 } else { 128 };
-      IpNet::new(ip, prefix_len).map_err(|err| AppError::TrustedProxy {
-        value: value.clone(),
-        reason: err.to_string(),
+      IpNet::new(ip, prefix_len).map_err(|err| {
+        AppError::TrustedProxy {
+          value:  value.clone(),
+          reason: err.to_string(),
+        }
       })
     })
     .collect()
