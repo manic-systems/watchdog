@@ -25,6 +25,12 @@ pub enum ConfigError {
     InvalidMaxSources,
     #[error("limits.max_custom_events must be greater than 0")]
     InvalidMaxCustomEvents,
+    #[error("limits.max_dimension_values must be greater than 0")]
+    InvalidMaxDimensionValues,
+    #[error("limits.max_property_keys must be greater than 0")]
+    InvalidMaxPropertyKeys,
+    #[error("limits.max_property_values must be greater than 0")]
+    InvalidMaxPropertyValues,
     #[error("security.metrics_auth: username and password are required when enabled")]
     InvalidMetricsAuth,
     #[error("security.cors: allowed_origins is required when enabled")]
@@ -88,9 +94,16 @@ impl SaltRotation {
 #[serde(default, deny_unknown_fields)]
 pub struct CollectConfig {
     pub pageviews: bool,
+    pub sessions: bool,
+    pub engagement: bool,
     pub country: bool,
     pub device: bool,
+    pub browser: bool,
+    pub os: bool,
+    pub screen: bool,
     pub referrer: ReferrerMode,
+    pub acquisition: bool,
+    pub properties: bool,
     pub domain: bool,
 }
 
@@ -98,9 +111,16 @@ impl Default for CollectConfig {
     fn default() -> Self {
         Self {
             pageviews: true,
+            sessions: true,
+            engagement: true,
             country: false,
             device: true,
+            browser: false,
+            os: false,
+            screen: false,
             referrer: ReferrerMode::Domain,
+            acquisition: false,
+            properties: false,
             domain: false,
         }
     }
@@ -144,6 +164,9 @@ pub struct LimitsConfig {
     pub max_events_per_minute: u32,
     pub max_sources: usize,
     pub max_custom_events: usize,
+    pub max_dimension_values: usize,
+    pub max_property_keys: usize,
+    pub max_property_values: usize,
     pub max_metrics_per_minute: u32,
     pub device_breakpoints: DeviceBreakpoints,
 }
@@ -155,6 +178,9 @@ impl Default for LimitsConfig {
             max_events_per_minute: 10_000,
             max_sources: 500,
             max_custom_events: 100,
+            max_dimension_values: 1_000,
+            max_property_keys: 50,
+            max_property_values: 500,
             max_metrics_per_minute: 60,
             device_breakpoints: DeviceBreakpoints::default(),
         }
@@ -300,6 +326,18 @@ impl Config {
             return Err(ConfigError::InvalidMaxCustomEvents);
         }
 
+        if self.limits.max_dimension_values == 0 {
+            return Err(ConfigError::InvalidMaxDimensionValues);
+        }
+
+        if self.limits.max_property_keys == 0 {
+            return Err(ConfigError::InvalidMaxPropertyKeys);
+        }
+
+        if self.limits.max_property_values == 0 {
+            return Err(ConfigError::InvalidMaxPropertyValues);
+        }
+
         if self.security.metrics_auth.enabled
             && (self.security.metrics_auth.username.is_empty()
                 || self.security.metrics_auth.password.is_empty())
@@ -345,7 +383,10 @@ mod tests {
 
         assert_eq!(config.site.domains, ["example.com"]);
         assert_eq!(config.server.metrics_path, "/metrics");
+        assert!(config.site.collect.sessions);
+        assert!(config.site.collect.engagement);
         assert_eq!(config.limits.device_breakpoints.mobile, 768);
+        assert_eq!(config.limits.max_dimension_values, 1_000);
     }
 
     #[test]
@@ -361,6 +402,13 @@ mod tests {
         assert!(matches!(
             config.validate(),
             Err(ConfigError::InvalidMaxPaths)
+        ));
+
+        config.limits.max_paths = 1;
+        config.limits.max_dimension_values = 0;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::InvalidMaxDimensionValues)
         ));
     }
 

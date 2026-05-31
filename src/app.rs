@@ -26,6 +26,7 @@ use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
+use url::{Url, form_urlencoded};
 use uuid::Uuid;
 
 use crate::{
@@ -33,7 +34,7 @@ use crate::{
     config::{Config, CorsConfig, ReferrerMode},
     event::Event,
     limits::{MAX_EVENT_SIZE, MAX_METRICS_RESPONSE_SIZE},
-    metrics::{Metrics, PageviewLabels, sanitize_label},
+    metrics::{DimensionLabels, Metrics, sanitize_label},
     normalize::{PathNormalizer, extract_referrer_domain, extract_referrer_url},
     registry::BoundedRegistry,
 };
@@ -71,6 +72,9 @@ struct AppStateInner {
     path_registry: BoundedRegistry,
     referrer_registry: BoundedRegistry,
     custom_event_registry: BoundedRegistry,
+    dimension_registry: BoundedRegistry,
+    property_key_registry: BoundedRegistry,
+    property_value_registry: BoundedRegistry,
     metrics: Arc<Metrics>,
 }
 
@@ -92,6 +96,9 @@ impl AppState {
                 path_registry: BoundedRegistry::new(config.limits.max_paths),
                 referrer_registry: BoundedRegistry::new(config.limits.max_sources),
                 custom_event_registry: BoundedRegistry::new(config.limits.max_custom_events),
+                dimension_registry: BoundedRegistry::new(config.limits.max_dimension_values),
+                property_key_registry: BoundedRegistry::new(config.limits.max_property_keys),
+                property_value_registry: BoundedRegistry::new(config.limits.max_property_values),
                 ingestion_limiter: rate_limiter(config.limits.max_events_per_minute),
                 metrics_limiter: rate_limiter(config.limits.max_metrics_per_minute),
                 allowed_domains,
@@ -218,7 +225,8 @@ async fn ingest(
         return response_with_request_id(StatusCode::BAD_REQUEST, request_id);
     }
 
-    let normalized_path = state.inner.path_normalizer.normalize(&event.path);
+    let event_path = event.path();
+    let normalized_path = state.inner.path_normalizer.normalize(&event_path);
     if !state.inner.path_registry.add(&normalized_path) {
         state.inner.metrics.record_path_overflow();
         return response_with_request_id(StatusCode::NO_CONTENT, request_id);
@@ -235,65 +243,191 @@ async fn ingest(
         .metrics
         .add_unique(&client_ip.to_string(), user_agent);
 
-    let event_name = sanitize_label(event.event.trim());
-    if event.event.trim().is_empty() {
-        record_pageview(&state, &event, &event_domain, normalized_path, user_agent);
-    } else if state.inner.allowed_events.is_empty()
-        || state.inner.allowed_events.contains(&event_name)
-    {
-        record_custom_event(&state, &event_name);
+    let labels = metric_labels(
+        &state,
+        &event,
+        &event_path,
+        &event_domain,
+        normalized_path,
+        user_agent,
+    );
+    let event_name = event.event_name();
+    let is_pageview = is_pageview_event(&event_name);
+    let event_label = (!is_pageview)
+        .then(|| bounded_event_label(&state, &event_name))
+        .flatten();
+
+    if event.is_new_session() && state.config().site.collect.sessions {
+        state.inner.metrics.record_session(&labels);
     }
+
+    if is_pageview {
+        record_pageview(&state, &labels);
+    } else if let Some(event_label) = event_label.as_deref() {
+        record_event(&state, event_label, &labels);
+    }
+
+    record_engagement(&state, &event, &labels);
+    record_properties(
+        &state,
+        if is_pageview {
+            Some("pageview")
+        } else {
+            event_label.as_deref()
+        },
+        &event,
+    );
 
     response_with_request_id(StatusCode::NO_CONTENT, request_id)
 }
 
-fn record_pageview(
-    state: &AppState,
-    event: &Event,
-    event_domain: &str,
-    normalized_path: String,
-    user_agent: &str,
-) {
+fn record_pageview(state: &AppState, labels: &DimensionLabels) {
     if !state.config().site.collect.pageviews {
         return;
     }
 
-    let device = state.config().site.collect.device.then(|| {
-        classify_device(
-            event.width,
-            user_agent,
-            state.config().limits.device_breakpoints,
-        )
-    });
-    let referrer = referrer_label(state, &event.referrer, event_domain);
-    let domain = state
-        .config()
-        .site
-        .collect
-        .domain
-        .then(|| event_domain.to_owned());
-    let country = state
-        .config()
-        .site
-        .collect
-        .country
-        .then(|| "unknown".to_owned());
-
-    state.inner.metrics.record_pageview(PageviewLabels {
-        path: normalized_path,
-        country,
-        device,
-        referrer,
-        domain,
-    });
+    state.inner.metrics.record_pageview(labels);
 }
 
-fn record_custom_event(state: &AppState, event_name: &str) {
-    if state.inner.custom_event_registry.add(event_name) {
-        state.inner.metrics.record_custom_event(event_name);
+fn record_event(state: &AppState, event_name: &str, labels: &DimensionLabels) {
+    state.inner.metrics.record_custom_event(event_name);
+    state.inner.metrics.record_event(event_name, labels);
+}
+
+fn record_engagement(state: &AppState, event: &Event, labels: &DimensionLabels) {
+    if !state.config().site.collect.engagement {
+        return;
+    }
+
+    if let Some(seconds) = event.engagement_seconds() {
+        state
+            .inner
+            .metrics
+            .record_engagement_seconds(labels, seconds);
+    }
+    if event.scroll_depth() > 0 {
+        state
+            .inner
+            .metrics
+            .record_scroll_depth(labels, event.scroll_depth());
+    }
+}
+
+fn record_properties(state: &AppState, event_name: Option<&str>, event: &Event) {
+    if !state.config().site.collect.properties {
+        return;
+    }
+
+    let Some(event_name) = event_name else {
+        return;
+    };
+
+    for (key, value) in event.properties() {
+        let key = sanitize_label(&key);
+        let value = sanitize_label(&value);
+        if !state.inner.property_key_registry.add(&key) {
+            state
+                .inner
+                .metrics
+                .record_dimension_overflow("property_key");
+            continue;
+        }
+
+        let registry_key = format!("{key}={value}");
+        let value = if state.inner.property_value_registry.add(&registry_key) {
+            value
+        } else {
+            state
+                .inner
+                .metrics
+                .record_dimension_overflow("property_value");
+            "other".to_owned()
+        };
+        state
+            .inner
+            .metrics
+            .record_custom_property(event_name, &key, &value);
+    }
+}
+
+fn metric_labels(
+    state: &AppState,
+    event: &Event,
+    event_path: &str,
+    event_domain: &str,
+    normalized_path: String,
+    user_agent: &str,
+) -> DimensionLabels {
+    let collect = &state.config().site.collect;
+    let acquisition_url = if event.url().trim().is_empty() {
+        event_path
     } else {
-        state.inner.metrics.record_event_overflow();
-        state.inner.metrics.record_custom_event("other");
+        event.url()
+    };
+    let acquisition = collect
+        .acquisition
+        .then(|| acquisition_labels(acquisition_url, event.referrer(), event_domain));
+
+    DimensionLabels {
+        path: normalized_path,
+        country: collect.country.then(|| "unknown".to_owned()),
+        device: collect.device.then(|| {
+            classify_device(
+                event.width(),
+                user_agent,
+                state.config().limits.device_breakpoints,
+            )
+        }),
+        referrer: referrer_label(state, event.referrer(), event_domain),
+        referrer_source: acquisition.as_ref().map(|labels| {
+            bounded_dimension(
+                state,
+                "referrer_source",
+                labels.referrer_source.clone(),
+                "direct",
+            )
+        }),
+        utm_source: acquisition.as_ref().map(|labels| {
+            bounded_dimension(state, "utm_source", labels.utm_source.clone(), "none")
+        }),
+        utm_medium: acquisition.as_ref().map(|labels| {
+            bounded_dimension(state, "utm_medium", labels.utm_medium.clone(), "none")
+        }),
+        utm_campaign: acquisition.as_ref().map(|labels| {
+            bounded_dimension(state, "utm_campaign", labels.utm_campaign.clone(), "none")
+        }),
+        utm_content: acquisition.as_ref().map(|labels| {
+            bounded_dimension(state, "utm_content", labels.utm_content.clone(), "none")
+        }),
+        utm_term: acquisition
+            .as_ref()
+            .map(|labels| bounded_dimension(state, "utm_term", labels.utm_term.clone(), "none")),
+        click_id: acquisition
+            .as_ref()
+            .map(|labels| bounded_dimension(state, "click_id", labels.click_id.clone(), "none")),
+        browser: collect.browser.then(|| {
+            bounded_dimension(
+                state,
+                "browser",
+                Some(classify_browser(user_agent)),
+                "unknown",
+            )
+        }),
+        os: collect
+            .os
+            .then(|| bounded_dimension(state, "os", Some(classify_os(user_agent)), "unknown")),
+        screen: collect.screen.then(|| {
+            bounded_dimension(
+                state,
+                "screen",
+                Some(classify_screen(
+                    event.width(),
+                    state.config().limits.device_breakpoints,
+                )),
+                "unknown",
+            )
+        }),
+        domain: collect.domain.then(|| event_domain.to_owned()),
     }
 }
 
@@ -312,6 +446,134 @@ fn referrer_label(state: &AppState, referrer: &str, event_domain: &str) -> Optio
         state.inner.metrics.record_referrer_overflow();
         Some("other".to_owned())
     }
+}
+
+fn bounded_dimension(
+    state: &AppState,
+    dimension: &'static str,
+    value: Option<String>,
+    fallback: &'static str,
+) -> String {
+    let value = value
+        .map(|value| sanitize_label(value.trim()))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.to_owned());
+
+    if matches!(
+        value.as_str(),
+        "direct" | "internal" | "none" | "unknown" | "other"
+    ) {
+        return value;
+    }
+
+    let registry_key = format!("{dimension}={value}");
+    if state.inner.dimension_registry.add(&registry_key) {
+        value
+    } else {
+        state.inner.metrics.record_dimension_overflow(dimension);
+        "other".to_owned()
+    }
+}
+
+#[derive(Default)]
+struct AcquisitionLabels {
+    referrer_source: Option<String>,
+    utm_source: Option<String>,
+    utm_medium: Option<String>,
+    utm_campaign: Option<String>,
+    utm_content: Option<String>,
+    utm_term: Option<String>,
+    click_id: Option<String>,
+}
+
+fn acquisition_labels(url: &str, referrer: &str, event_domain: &str) -> AcquisitionLabels {
+    let mut labels = AcquisitionLabels {
+        referrer_source: extract_referrer_domain(referrer, event_domain),
+        ..AcquisitionLabels::default()
+    };
+
+    if let Some(query) = query_string(url) {
+        for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+            let value = value.trim();
+            if value.is_empty() {
+                continue;
+            }
+
+            match key.to_ascii_lowercase().as_ref() {
+                "utm_source" => set_once(&mut labels.utm_source, value),
+                "utm_medium" => set_once(&mut labels.utm_medium, value),
+                "utm_campaign" => set_once(&mut labels.utm_campaign, value),
+                "utm_content" => set_once(&mut labels.utm_content, value),
+                "utm_term" => set_once(&mut labels.utm_term, value),
+                key if is_click_id_param(key) => set_once(&mut labels.click_id, key),
+                _ => {}
+            }
+        }
+    }
+
+    labels
+}
+
+fn query_string(input: &str) -> Option<String> {
+    if let Ok(url) = Url::parse(input) {
+        return url.query().map(str::to_owned);
+    }
+
+    input.split_once('?').map(|(_, query)| {
+        query
+            .split_once('#')
+            .map_or(query, |(query, _)| query)
+            .to_owned()
+    })
+}
+
+fn set_once(target: &mut Option<String>, value: &str) {
+    if target.is_none() {
+        *target = Some(value.trim().to_owned());
+    }
+}
+
+fn is_click_id_param(key: &str) -> bool {
+    matches!(
+        key,
+        "gclid" | "gbraid" | "wbraid" | "fbclid" | "msclkid" | "ttclid" | "twclid" | "li_fat_id"
+    )
+}
+
+fn is_pageview_event(event_name: &str) -> bool {
+    let event_name = event_name.trim();
+    event_name.is_empty() || event_name.eq_ignore_ascii_case("pageview")
+}
+
+fn bounded_event_label(state: &AppState, event_name: &str) -> Option<String> {
+    let event_name = sanitize_label(event_name.trim());
+
+    if !is_system_event(&event_name)
+        && !state.inner.allowed_events.is_empty()
+        && !state.inner.allowed_events.contains(&event_name)
+    {
+        return None;
+    }
+
+    if is_system_event(&event_name) || state.inner.custom_event_registry.add(&event_name) {
+        Some(event_name)
+    } else {
+        state.inner.metrics.record_event_overflow();
+        Some("other".to_owned())
+    }
+}
+
+fn is_system_event(event_name: &str) -> bool {
+    matches!(
+        event_name,
+        "engagement"
+            | "Outbound Link: Click"
+            | "Cloaked Link: Click"
+            | "File Download"
+            | "404"
+            | "WP Form Completions"
+            | "Form: Submission"
+    )
 }
 
 async fn metrics(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -446,6 +708,71 @@ fn classify_device(
     }
 }
 
+fn classify_screen(width: u16, breakpoints: crate::config::DeviceBreakpoints) -> String {
+    if width == 0 {
+        return "unknown".to_owned();
+    }
+    if width < breakpoints.mobile {
+        return "mobile".to_owned();
+    }
+    if width < breakpoints.tablet {
+        return "tablet".to_owned();
+    }
+    if width >= 1440 {
+        return "wide".to_owned();
+    }
+    "desktop".to_owned()
+}
+
+fn classify_browser(user_agent: &str) -> String {
+    let ua = user_agent.to_ascii_lowercase();
+    if ua.is_empty() {
+        return "unknown".to_owned();
+    }
+    if ua.contains("bot") || ua.contains("crawler") || ua.contains("spider") {
+        return "bot".to_owned();
+    }
+    if ua.contains("edg/") || ua.contains("edge/") {
+        return "edge".to_owned();
+    }
+    if ua.contains("opr/") || ua.contains("opera") {
+        return "opera".to_owned();
+    }
+    if ua.contains("firefox/") || ua.contains("fxios/") {
+        return "firefox".to_owned();
+    }
+    if ua.contains("chrome/") || ua.contains("crios/") || ua.contains("chromium/") {
+        return "chrome".to_owned();
+    }
+    if ua.contains("safari/") {
+        return "safari".to_owned();
+    }
+    "other".to_owned()
+}
+
+fn classify_os(user_agent: &str) -> String {
+    let ua = user_agent.to_ascii_lowercase();
+    if ua.is_empty() {
+        return "unknown".to_owned();
+    }
+    if ua.contains("windows") {
+        return "windows".to_owned();
+    }
+    if ua.contains("android") {
+        return "android".to_owned();
+    }
+    if ua.contains("iphone") || ua.contains("ipad") || ua.contains("ipod") {
+        return "ios".to_owned();
+    }
+    if ua.contains("mac os") || ua.contains("macintosh") {
+        return "macos".to_owned();
+    }
+    if ua.contains("linux") || ua.contains("x11") {
+        return "linux".to_owned();
+    }
+    "other".to_owned()
+}
+
 fn cors_layer(config: &CorsConfig) -> Result<CorsLayer, AppError> {
     let layer = CorsLayer::new()
         .allow_methods([Method::POST, Method::OPTIONS])
@@ -543,6 +870,24 @@ mod tests {
         assert_eq!(classify_device(900, "", breakpoints), "tablet");
         assert_eq!(classify_device(1440, "", breakpoints), "desktop");
         assert_eq!(classify_device(0, "", breakpoints), "unknown");
+        assert_eq!(classify_screen(390, breakpoints), "mobile");
+        assert_eq!(classify_screen(1440, breakpoints), "wide");
+        assert_eq!(classify_browser("Mozilla/5.0 Firefox/120.0"), "firefox");
+        assert_eq!(classify_os("Mozilla/5.0 (X11; Linux x86_64)"), "linux");
+    }
+
+    #[test]
+    fn extracts_acquisition_labels() {
+        let labels = acquisition_labels(
+            "https://example.com/?utm_source=newsletter&utm_medium=email&gclid=abc",
+            "https://news.ycombinator.com/item?id=1",
+            "example.com",
+        );
+
+        assert_eq!(labels.utm_source, Some("newsletter".to_owned()));
+        assert_eq!(labels.utm_medium, Some("email".to_owned()));
+        assert_eq!(labels.click_id, Some("gclid".to_owned()));
+        assert_eq!(labels.referrer_source, Some("ycombinator.com".to_owned()));
     }
 
     #[test]
