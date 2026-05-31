@@ -16,6 +16,10 @@
 
   var tracked = false;
   var lastPage = null;
+  var sessionStarted = false;
+  var engagementStartedAt = Date.now();
+  var engagementMs = 0;
+  var maxScrollDepth = 0;
 
   // Parse exclusions (comma-separated paths)
   var exclusions = config.exclude
@@ -82,15 +86,78 @@
     }
   }
 
+  function absoluteUrl(path) {
+    if (!path) return window.location.href;
+    try {
+      return new URL(path, window.location.href).href;
+    } catch (e) {
+      return window.location.href;
+    }
+  }
+
+  function sessionMarker() {
+    if (sessionStarted) return false;
+
+    var key = "watchdog:session:" + config.domain;
+    try {
+      if (window.sessionStorage.getItem(key)) {
+        sessionStarted = true;
+        return false;
+      }
+      window.sessionStorage.setItem(key, "1");
+    } catch (e) {
+      // Fall back to an in-memory marker when sessionStorage is unavailable.
+    }
+
+    sessionStarted = true;
+    return true;
+  }
+
+  function cleanProps(props) {
+    if (!props || typeof props !== "object") return null;
+
+    var cleaned = {};
+    var count = 0;
+    for (var key in props) {
+      if (!Object.prototype.hasOwnProperty.call(props, key)) continue;
+      if (count >= 20) break;
+
+      var cleanKey = String(key).slice(0, 64);
+      if (!cleanKey) continue;
+
+      var value = props[key];
+      if (typeof value === "string") {
+        value = value.slice(0, 200);
+      } else if (typeof value !== "number" && typeof value !== "boolean") {
+        if (value === null || value === undefined) continue;
+        value = String(value).slice(0, 200);
+      }
+
+      cleaned[cleanKey] = value;
+      count++;
+    }
+
+    return count ? cleaned : null;
+  }
+
   // Build payload
   function buildPayload(opts) {
     opts = opts || {};
-    return {
+    var payload = {
       d: config.domain,
-      p: opts.path || window.location.pathname + window.location.search,
+      u: opts.url || absoluteUrl(opts.path),
       r: opts.referrer !== undefined ? opts.referrer : document.referrer || "",
       w: window.screen.width || 0,
     };
+
+    if (opts.name) payload.n = opts.name;
+    var props = cleanProps(opts.props);
+    if (props) payload.p = props;
+    if (opts.engagementSeconds) payload.e = opts.engagementSeconds;
+    if (opts.scrollDepth) payload.sd = opts.scrollDepth;
+    if (opts.session) payload.s = true;
+
+    return payload;
   }
 
   // Track a pageview
@@ -113,7 +180,9 @@
 
     var payload = buildPayload({
       path: currentPage,
+      name: "pageview",
       referrer: opts.referrer,
+      session: sessionMarker(),
     });
 
     sendBeacon(payload);
@@ -128,7 +197,57 @@
 
     opts = opts || {};
     var payload = buildPayload(opts);
-    payload.e = eventName;
+    payload.n = eventName;
+    sendBeacon(payload);
+  }
+
+  function updateEngagement() {
+    if (document.hidden) return;
+
+    var now = Date.now();
+    engagementMs += now - engagementStartedAt;
+    engagementStartedAt = now;
+  }
+
+  function updateScrollDepth() {
+    var doc = document.documentElement;
+    var body = document.body;
+    var scrollTop = window.pageYOffset || doc.scrollTop || body.scrollTop || 0;
+    var viewport = window.innerHeight || doc.clientHeight || 0;
+    var height = Math.max(
+      body.scrollHeight,
+      body.offsetHeight,
+      doc.clientHeight,
+      doc.scrollHeight,
+      doc.offsetHeight
+    );
+
+    if (!height || height <= viewport) {
+      maxScrollDepth = Math.max(maxScrollDepth, 100);
+      return;
+    }
+
+    var depth = Math.round(((scrollTop + viewport) / height) * 100);
+    maxScrollDepth = Math.max(maxScrollDepth, Math.min(100, depth));
+  }
+
+  function sendEngagement() {
+    if (!tracked) return;
+
+    updateEngagement();
+    updateScrollDepth();
+
+    if (engagementMs < 1000 && maxScrollDepth === 0) return;
+
+    var seconds = Math.round(engagementMs / 100) / 10;
+    var payload = buildPayload({
+      name: "engagement",
+      engagementSeconds: seconds,
+      scrollDepth: maxScrollDepth,
+    });
+
+    engagementMs = 0;
+    maxScrollDepth = 0;
     sendBeacon(payload);
   }
 
@@ -147,7 +266,7 @@
     // Track as custom event
     trackEvent("Outbound Link: Click", {
       path: window.location.pathname,
-      referrer: url,
+      props: { url: url },
     });
   }
 
@@ -186,7 +305,8 @@
 
     // Track as custom event
     trackEvent("File Download", {
-      path: href,
+      path: window.location.pathname,
+      props: { url: href },
     });
   }
 
@@ -208,6 +328,16 @@
     if (config.fileDownloads) {
       document.addEventListener("click", trackFileDownload);
     }
+
+    window.addEventListener("scroll", updateScrollDepth, { passive: true });
+    window.addEventListener("pagehide", sendEngagement);
+    document.addEventListener("visibilitychange", function () {
+      if (document.hidden) {
+        sendEngagement();
+      } else {
+        engagementStartedAt = Date.now();
+      }
+    });
   }
 
   // Expose public API
