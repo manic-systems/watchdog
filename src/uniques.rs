@@ -23,27 +23,27 @@ pub enum UniqueStateError {
 
 pub struct UniquesEstimator {
   rotation: SaltRotation,
-  inner: Mutex<UniquesInner>,
+  inner:    Mutex<UniquesInner>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct PersistedUniques {
   salt_key: String,
-  salt: String,
-  hll: HyperLogLog<String>,
+  salt:     String,
+  hll:      HyperLogLog<String>,
 }
 
 #[derive(Serialize)]
 struct PersistedUniquesRef<'a> {
   salt_key: &'a str,
-  salt: &'a str,
-  hll: &'a HyperLogLog<String>,
+  salt:     &'a str,
+  hll:      &'a HyperLogLog<String>,
 }
 
 struct UniquesInner {
   salt_key: String,
-  salt: String,
-  hll: HyperLogLog<String>,
+  salt:     String,
+  hll:      HyperLogLog<String>,
 }
 
 impl UniquesEstimator {
@@ -106,8 +106,8 @@ impl UniquesEstimator {
       let inner = self.inner.lock();
       let persisted = PersistedUniquesRef {
         salt_key: &inner.salt_key,
-        salt: &inner.salt,
-        hll: &inner.hll,
+        salt:     &inner.salt,
+        hll:      &inner.hll,
       };
       postcard::to_stdvec(&persisted).map_err(UniqueStateError::Serialize)?
     };
@@ -131,19 +131,23 @@ impl UniquesEstimator {
 
 fn salt_key(now: OffsetDateTime, rotation: SaltRotation) -> String {
   match rotation {
-    SaltRotation::Daily => format!(
-      "{:04}-{:02}-{:02}",
-      now.year(),
-      u8::from(now.month()),
-      now.day()
-    ),
-    SaltRotation::Hourly => format!(
-      "{:04}-{:02}-{:02}T{:02}",
-      now.year(),
-      u8::from(now.month()),
-      now.day(),
-      now.hour()
-    ),
+    SaltRotation::Daily => {
+      format!(
+        "{:04}-{:02}-{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day()
+      )
+    },
+    SaltRotation::Hourly => {
+      format!(
+        "{:04}-{:02}-{:02}T{:02}",
+        now.year(),
+        u8::from(now.month()),
+        now.day(),
+        now.hour()
+      )
+    },
   }
 }
 

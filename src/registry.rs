@@ -7,9 +7,9 @@ use parking_lot::RwLock;
 
 #[derive(Debug)]
 pub struct BoundedRegistry {
-  entries: RwLock<HashSet<String>>,
+  entries:     RwLock<HashSet<String>>,
   max_entries: usize,
-  overflows: AtomicUsize,
+  overflows:   AtomicUsize,
 }
 
 impl BoundedRegistry {

@@ -35,8 +35,8 @@ async fn main() -> anyhow::Result<()> {
 
   let cli = Cli::parse();
   let overrides = config::Overrides {
-    listen_addr: cli.listen_addr,
-    metrics_path: cli.metrics_path,
+    listen_addr:    cli.listen_addr,
+    metrics_path:   cli.metrics_path,
     ingestion_path: cli.ingestion_path,
   };
 
