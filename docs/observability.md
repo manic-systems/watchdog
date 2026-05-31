@@ -140,7 +140,7 @@ For multiple Watchdog instances:
 ### Configure Data Source (Manual)
 
 If you're not using NixOS for provisioning, then you'll need to do provisioning
-_imperatively_ from your Grafana configuration. Ths can be done through the
+_imperatively_ from your Grafana configuration. This can be done through the
 admin panel by navigating to `Configuration`, and choosing "add data source"
 under `Data Sources`. Select your prometheus instance, and save it.
 
@@ -206,6 +206,14 @@ sum by (domain) (rate(web_pageviews_total[1h]))
 rate(web_path_overflow_total[5m])
 rate(web_referrer_overflow_total[5m])
 rate(web_event_overflow_total[5m])
+rate(web_dimension_overflow_total[5m])
+```
+
+### Engagement
+
+```promql
+sum(rate(web_engagement_seconds_total[5m]))
+sum by (depth) (rate(web_scroll_depth_total[1h]))
 ```
 
 ## Horizontal Scaling Considerations

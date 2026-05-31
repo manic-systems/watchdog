@@ -1,16 +1,19 @@
 # Watchdog
 
-Watchdog is a lightweight, privacy-first analytics system with fully declarative
-configuration that aggregates web traffic data and exports it as Prometheus
-metrics. Unlike traditional analytics platforms, Watchdog stores no raw events,
-uses no persistent user identifiers, and enforces bounded cardinality by design.
+Watchdog is a privacy-first analytics system with fully declarative
+configuration and little to no resource footprint designed to aggregate web
+traffic data and exports it as Prometheus metrics. Unlike traditional analytics
+platforms, Watchdog stores no raw events, uses no persistent user identifiers,
+and enforces bounded cardinality by design.
 
 ## Features
 
 Watchdog is **privacy-first** in design. There are no cookies, no `localStorage`
 or browser fingerprinting. Daily salt rotation prevents cross-day visitor
-correlation, and there is no raw event storage. We only aggregate metrics. Other
-noteworthy features:
+correlation, and there is no raw event storage. We only aggregate metrics; you
+visualise them as you see fit.
+
+Other noteworthy features:
 
 - Multi-site analytics with optional domain tracking
 - Bounded cardinality prevents metric explosion
@@ -18,8 +21,9 @@ noteworthy features:
 - Graceful shutdown with state persistence
 - IPv6 support with proper proxy header handling
 
-See the [privacy section](#privacy) for more details on what "guarantees"
-Watchdog has to offer.
+The privacy design choices of Watchdog are a little more intricate. See the
+[privacy section](#privacy) for more details on what "guarantees" Watchdog has
+to offer.
 
 ## Quick Start
 
@@ -129,7 +133,7 @@ listen_addr = "127.0.0.1:8080"
 
 ### JavaScript Beacon
 
-Similar to Plausible, Watchdog uses a Javascript beacon to track events. In the
+Similar to Plausible, Watchdog uses a JavaScript beacon to track events. In the
 most basic case, you must add it to your site in a `<script>` tag to begin
 collecting metrics:
 
@@ -138,8 +142,8 @@ collecting metrics:
 ```
 
 The script beacon also supports a _variety_ of configuration options via data
-attributions, which you might adjust to your own needs. Some of them are
-described below:
+attributes, which you might adjust to your own needs. Some of them are described
+below:
 
 ```html
 <!-- Custom API endpoint -->
@@ -163,6 +167,12 @@ described below:
 <!-- Manual pageview tracking -->
 <script src="/web/beacon.js" data-manual defer></script>
 
+<!-- Allow local development traffic -->
+<script src="/web/beacon.js" data-allow-localhost defer></script>
+
+<!-- Disable engagement and scroll tracking in the beacon -->
+<script src="/web/beacon.js" data-disable-engagement defer></script>
+
 <!-- Combine multiple options -->
 <script
   src="/web/beacon.js"
@@ -182,7 +192,7 @@ window.watchdog.track("signup");
 // Event with custom referrer
 window.watchdog.track("purchase", { referrer: "email-campaign" });
 
-// Event with bounded custom properties
+// Event with bounded custom properties. Requires site.collect.properties = true.
 window.watchdog.track("purchase", { props: { plan: "pro" } });
 
 // Manual pageview (when data-manual is set)
@@ -202,16 +212,16 @@ collects and aggregates metrics in a Prometheus-compatible manner at the
 **Prometheus**. Grafana is a common solution to _visualizing_ said data.
 
 See the [observability documentation] for full setup guide. It is, however,
-recommended to be somewhat knowledgable in those areas before attempting to
+recommended to be somewhat knowledgeable in those areas before attempting to
 deploy. There exists a Grafana dashboard with support for multi-host and
 multi-site deployments provided in the [contrib directory](contrib/grafana/).
 
-While not final, some of the metrics collected are as follows:
+Core metrics include:
 
 **Traffic metrics:**
 
-- `web_pageviews_total{path,device,referrer,domain}` - Total pageviews
-  - `domain` label only present if `site.collect.domain: true`
+- `web_pageviews_total{path,device,referrer,domain}` - Total pageviews. The
+  `domain` label is only present if `site.collect.domain: true`
 - `web_events_total{event,path,...}` - Non-pageview event counts with enabled
   dimensions
 - `web_custom_events_total{event}` - Custom event counts
@@ -246,12 +256,15 @@ aggregate counts. Some features worth noting.
 **No Persistent Identifiers:**
 
 - No cookies, `localStorage`, or fingerprinting
+- Session starts use a per-tab `sessionStorage` marker with no visitor ID
 - IP + User-Agent hashed with daily rotating salt
 - Hash discarded after HLL insertion
 
 **Data Minimization:**
 
-- Only collects: domain, path, referrer, screen width
+- Required event fields are limited to domain and URL/path
+- Optional aggregate fields include referrer, screen width, engagement time,
+  scroll depth, UTM labels, coarse device labels, and bounded custom properties
 - No raw event storage
 - All data aggregated at ingestion
 
