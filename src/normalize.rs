@@ -5,16 +5,19 @@ use url::Url;
 
 use crate::{config::PathConfig, limits::MAX_PATH_LEN};
 
+/// Normalizes request paths into bounded, low-cardinality metric labels.
 #[derive(Debug, Clone)]
 pub struct PathNormalizer {
   config: PathConfig,
 }
 
 impl PathNormalizer {
+  /// Creates a path normalizer using the configured normalization rules.
   pub fn new(config: PathConfig) -> Self {
     Self { config }
   }
 
+  /// Normalizes an input path into a stable label value.
   pub fn normalize(&self, input: &str) -> String {
     if input.is_empty() || input.len() > MAX_PATH_LEN {
       return "/".to_owned();
@@ -71,6 +74,8 @@ impl PathNormalizer {
   }
 }
 
+/// Extracts a low-cardinality external referrer domain or an internal/direct
+/// label.
 pub fn extract_referrer_domain(
   referrer: &str,
   site_domain: &str,
@@ -87,6 +92,7 @@ pub fn extract_referrer_domain(
     .or_else(|| Some("other".to_owned()))
 }
 
+/// Extracts a sanitized external referrer URL or an internal/direct label.
 pub fn extract_referrer_url(
   referrer: &str,
   site_domain: &str,
@@ -165,7 +171,7 @@ fn normalized_referrer_host(
 }
 
 fn is_internal_host(hostname: &str) -> bool {
-  if hostname == "localhost" || hostname.starts_with("localhost.") {
+  if hostname == "localhost" || hostname.ends_with(".localhost") {
     return true;
   }
 
@@ -224,6 +230,14 @@ mod tests {
     assert_eq!(
       extract_referrer_domain("http://127.0.0.1/test", "example.com"),
       Some("internal".to_owned())
+    );
+    assert_eq!(
+      extract_referrer_domain("https://app.localhost/test", "example.com"),
+      Some("internal".to_owned())
+    );
+    assert_eq!(
+      extract_referrer_domain("https://localhost.evil.com/test", "example.com"),
+      Some("evil.com".to_owned())
     );
   }
 }
