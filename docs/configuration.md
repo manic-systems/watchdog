@@ -1,177 +1,169 @@
 # Configuration
 
-Watchdog supports multiple configuration sources with the following precedence
-(highest to lowest):
+Watchdog configuration is loaded in this order, from lowest to highest
+precedence:
 
-1. **Command-line flags**
-2. **Environment variables**
-3. **Configuration file**
-4. **Defaults**
+1. Built-in defaults
+2. TOML configuration file
+3. Environment variables
+4. Command-line flags
 
 ## Configuration File
 
-The primary configuration method is via YAML file. By default, Watchdog looks
-for:
+By default, Watchdog looks for these TOML files:
 
-- `./config.yaml` (current directory)
-- `/etc/watchdog/config.yaml` (system-wide)
+- `./config.toml`
+- `/etc/watchdog/config.toml`
 
-Specify a custom location:
+Specify a custom path with `--config`:
 
 ```bash
-# Provide your configuration YAML file with --config
-$ watchdog --config /path/to/config.yaml
+watchdog --config /path/to/config.toml
 ```
 
-See [config.example.yaml](../config.example.yaml) for all available options.
+See [config.example.toml](../config.example.toml) for a complete example.
+
+## Minimal Config
+
+Only `site.domains` is required. All limits and server paths have conservative
+defaults.
+
+```toml
+[site]
+domains = ["example.com"]
+```
 
 ## Environment Variables
 
-All configuration options can be set via environment variables with the
-`WATCHDOG_` prefix.
-
-Nested fields use underscore separators. For example:
+Environment variables use the `WATCHDOG_` prefix. Nested fields use double
+underscores so field names can keep their TOML underscores unambiguously.
 
 ```bash
-# site.domains
-$ export WATCHDOG_SITE_DOMAINS="example.com,blog.example.com"
-
-# server.listen_addr
-$ export WATCHDOG_SERVER_LISTEN_ADDR="127.0.0.1:8080"
-
-# site.collect.pageviews
-$ export WATCHDOG_SITE_COLLECT_PAGEVIEWS=true
-
-# limits.max_paths
-$ export WATCHDOG_LIMITS_MAX_PATHS=10000
+export WATCHDOG_SERVER__LISTEN_ADDR="127.0.0.1:8080"
+export WATCHDOG_SITE__SAMPLING=1.0
+export WATCHDOG_SITE__COLLECT__DEVICE=true
+export WATCHDOG_LIMITS__MAX_PATHS=10000
+export WATCHDOG_SECURITY__METRICS_AUTH__PASSWORD="secret"
 ```
 
-### Common Environment Variables
-
-```bash
-# Server
-WATCHDOG_SERVER_LISTEN_ADDR="127.0.0.1:8080"
-WATCHDOG_SERVER_METRICS_PATH="/metrics"
-WATCHDOG_SERVER_INGESTION_PATH="/api/event"
-WATCHDOG_SERVER_STATE_PATH="/var/lib/watchdog/hll.state"
-
-# Site
-WATCHDOG_SITE_DOMAINS="example.com" # comma-separated for multiple
-WATCHDOG_SITE_SALT_ROTATION="daily"
-WATCHDOG_SITE_SAMPLING=1.0
-
-# Collection
-WATCHDOG_SITE_COLLECT_PAGEVIEWS=true
-WATCHDOG_SITE_COLLECT_COUNTRY=true
-WATCHDOG_SITE_COLLECT_DEVICE=true
-WATCHDOG_SITE_COLLECT_REFERRER="domain"
-WATCHDOG_SITE_COLLECT_DOMAIN=false
-
-# Limits
-WATCHDOG_LIMITS_MAX_PATHS=10000
-WATCHDOG_LIMITS_MAX_SOURCES=500
-WATCHDOG_LIMITS_MAX_CUSTOM_EVENTS=100
-WATCHDOG_LIMITS_MAX_EVENTS_PER_MINUTE=10000
-
-# Security
-WATCHDOG_SECURITY_CORS_ENABLED=false
-WATCHDOG_SECURITY_METRICS_AUTH_ENABLED=false
-WATCHDOG_SECURITY_METRICS_AUTH_USERNAME="admin"
-WATCHDOG_SECURITY_METRICS_AUTH_PASSWORD="changeme"
-```
+Prefer TOML for arrays such as `site.domains` and `security.trusted_proxies`.
 
 ## Command-Line Flags
 
-Command-line flags override both config file and environment variables:
+The CLI intentionally exposes only operational overrides:
 
 ```bash
-# Override server address
 watchdog --listen-addr :9090
-
-# Override metrics path
 watchdog --metrics-path /prometheus/metrics
-
-# Override ingestion path
 watchdog --ingestion-path /api/v1/event
-
-# Combine multiple overrides
-watchdog --config prod.yaml --listen-addr :9090 --metrics-path /metrics
+watchdog --config prod.toml --listen-addr :9090
 ```
 
 Available flags:
 
-- `--config string` - Path to config file
-- `--listen-addr string` - Server listen address
-- `--metrics-path string` - Metrics endpoint path
-- `--ingestion-path string` - Ingestion endpoint path
+- `--config <path>`
+- `--listen-addr <addr>`
+- `--metrics-path <path>`
+- `--ingestion-path <path>`
 
-## Configuration Precedence Example
+## Reference
 
-Given:
+### Site
 
-**config.yaml:**
-
-```yaml
-server:
-  listen_addr: ":8080"
-  metrics_path: "/metrics"
+```toml
+[site]
+domains = ["example.com", "blog.example.com"]
+salt_rotation = "daily" # "daily", "hourly", or omit to disable uniques
+sampling = 1.0
+custom_events = ["signup", "purchase"]
 ```
 
-**Environment:**
+### Collection
 
-```bash
-export WATCHDOG_SERVER_LISTEN_ADDR=":9090"
+```toml
+[site.collect]
+pageviews = true
+country = false
+device = true
+referrer = "domain" # "off", "domain", or "url"
+domain = false
 ```
 
-**Command:**
+`country = true` currently emits the `country="unknown"` label. It is retained
+as a stable configuration surface for future GeoIP enrichment.
 
-```bash
-watchdog --metrics-path "/prometheus/metrics"
+### Path Normalization
+
+```toml
+[site.path]
+strip_query = true
+strip_fragment = true
+collapse_numeric_segments = true
+max_segments = 5
+normalize_trailing_slash = true
 ```
 
-**Result:**
+### Limits
 
-- `listen_addr`: `:9090` (from environment variable)
-- `metrics_path`: `/prometheus/metrics` (from CLI flag)
+```toml
+[limits]
+max_paths = 10000
+max_sources = 500
+max_custom_events = 100
+max_events_per_minute = 10000
+max_metrics_per_minute = 60
 
-## Systemd Integration
+[limits.device_breakpoints]
+mobile = 768
+tablet = 1024
+```
 
-Environment variables work seamlessly with systemd:
+### Security
+
+```toml
+[security]
+trusted_proxies = ["127.0.0.1", "10.0.0.0/8"]
+
+[security.cors]
+enabled = false
+allowed_origins = ["*"]
+
+[security.metrics_auth]
+enabled = false
+username = "admin"
+password = "changeme"
+```
+
+Only requests arriving from `trusted_proxies` may use `X-Forwarded-For` or
+`X-Real-IP` for visitor estimation.
+
+### Server
+
+```toml
+[server]
+listen_addr = "127.0.0.1:8080"
+metrics_path = "/metrics"
+ingestion_path = "/api/event"
+state_path = "/var/lib/watchdog/hll.state"
+```
+
+## Systemd
 
 ```ini
 [Service]
-Environment="WATCHDOG_SERVER_LISTEN_ADDR=127.0.0.1:8080"
-Environment="WATCHDOG_SITE_DOMAINS=example.com"
-Environment="WATCHDOG_LIMITS_MAX_PATHS=10000"
-ExecStart=/usr/local/bin/watchdog --config /etc/watchdog/config.yaml
+Environment="WATCHDOG_SERVER__LISTEN_ADDR=127.0.0.1:8080"
+Environment="WATCHDOG_SECURITY__METRICS_AUTH__PASSWORD=secret"
+ExecStart=/usr/local/bin/watchdog --config /etc/watchdog/config.toml
 ```
 
-Or use `EnvironmentFile`:
-
-```ini
-[Service]
-EnvironmentFile=/etc/watchdog/env
-ExecStart=/usr/local/bin/watchdog
-```
-
-**/etc/watchdog/env:**
-
-```bash
-WATCHDOG_SERVER_LISTEN_ADDR=127.0.0.1:8080
-WATCHDOG_SITE_DOMAINS=example.com
-WATCHDOG_LIMITS_MAX_PATHS=10000
-```
-
-## NixOS Integration
-
-NixOS configuration automatically converts to the correct format:
+## NixOS
 
 ```nix
 {
   services.watchdog = {
     enable = true;
     settings = {
-      site.domains = [ "example.com" ];
+      site.domains = ["example.com"];
       server.listen_addr = "127.0.0.1:8080";
       limits.max_paths = 10000;
     };
@@ -179,59 +171,16 @@ NixOS configuration automatically converts to the correct format:
 }
 ```
 
-This is equivalent to setting environment variables or using a config file.
+The NixOS module serializes `settings` as TOML and defaults
+`server.state_path` to the module `stateDir`.
 
 ## Validation
 
-Configuration is validated on startup. Invalid values will cause Watchdog to
-exit with an error:
+Invalid configuration fails startup with a clear error. Common failures include:
 
-```bash
-$ watchdog
-Error: config validation failed: site.domains is required
-```
-
-Common validation errors:
-
-- `site.domains is required` - No domains configured
-- `limits.max_paths must be greater than 0` - Invalid cardinality limit
-- `site.collect.referrer must be 'off', 'domain', or 'url'` - Invalid referrer
-  mode
-- `site.sampling must be between 0.0 and 1.0` - Invalid sampling rate
-
-## Best Practices
-
-1. **Use config file for base configuration** - Easier to version control and
-   review
-2. **Use environment variables for secrets** - Don't commit passwords to config
-   files
-3. **Use CLI flags for testing/overrides** - Quick temporary changes without
-   editing files
-
-Example hybrid approach:
-
-**config.yaml:**
-
-```yaml
-site:
-  domains:
-    - example.com
-  collect:
-    pageviews: true
-    device: true
-
-limits:
-  max_paths: 10000
-```
-
-**Environment (secrets):**
-
-```bash
-export WATCHDOG_SECURITY_METRICS_AUTH_PASSWORD="$SECRET_PASSWORD"
-```
-
-**CLI (testing):**
-
-```bash
-watchdog --listen-addr :9090  # Test on different port
-```
+- Missing `site.domains`
+- `site.sampling` outside `0.0..=1.0`
+- Zero cardinality limits
+- Enabled CORS without `allowed_origins`
+- Enabled metrics auth without username or password
+- Endpoint paths that do not start with `/`

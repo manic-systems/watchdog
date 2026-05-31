@@ -1,6 +1,0 @@
-site:
-  domain: ""
-  salt_rotation: daily
-
-limits:
-  max_paths: 0
