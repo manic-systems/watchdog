@@ -3,15 +3,26 @@
   "use strict";
 
   // Configuration from script tag data attributes
-  var scriptEl = document.currentScript;
+  var scriptEl = document.currentScript || lastScriptElement();
+
+  function attr(name) {
+    return scriptEl ? scriptEl.getAttribute(name) : null;
+  }
+
+  function hasAttr(name) {
+    return !!(scriptEl && scriptEl.hasAttribute(name));
+  }
+
   var config = {
-    endpoint: scriptEl.getAttribute("data-api") || "/api/event",
-    domain: scriptEl.getAttribute("data-domain") || window.location.hostname,
-    hashMode: scriptEl.hasAttribute("data-hash-mode"),
-    outboundLinks: scriptEl.hasAttribute("data-outbound-links"),
-    fileDownloads: scriptEl.hasAttribute("data-file-downloads"),
-    exclude: scriptEl.getAttribute("data-exclude") || "",
-    manual: scriptEl.hasAttribute("data-manual"),
+    endpoint: attr("data-api") || "/api/event",
+    domain: attr("data-domain") || window.location.hostname,
+    hashMode: hasAttr("data-hash-mode"),
+    outboundLinks: hasAttr("data-outbound-links"),
+    fileDownloads: hasAttr("data-file-downloads"),
+    exclude: attr("data-exclude") || "",
+    manual: hasAttr("data-manual"),
+    allowLocalhost: hasAttr("data-allow-localhost"),
+    engagement: !hasAttr("data-disable-engagement"),
   };
 
   var tracked = false;
@@ -20,12 +31,23 @@
   var engagementStartedAt = Date.now();
   var engagementMs = 0;
   var maxScrollDepth = 0;
+  var scrollQueued = false;
+
+  function lastScriptElement() {
+    var scripts = document.getElementsByTagName("script");
+    return scripts.length ? scripts[scripts.length - 1] : null;
+  }
 
   // Parse exclusions (comma-separated paths)
   var exclusions = config.exclude
-    ? config.exclude.split(",").map(function (s) {
-        return s.trim();
-      })
+    ? config.exclude
+        .split(",")
+        .map(function (s) {
+          return s.trim();
+        })
+        .filter(function (s) {
+          return s.length > 0;
+        })
     : [];
 
   // Check if page should be tracked
@@ -35,7 +57,7 @@
       window.location.hostname === "localhost" ||
       window.location.hostname === "127.0.0.1"
     ) {
-      return false;
+      return config.allowLocalhost;
     }
 
     // Check exclusions
@@ -51,15 +73,18 @@
 
   // Send analytics payload to server
   function sendBeacon(payload) {
-    if (!shouldTrack()) return;
+    if (!shouldTrack()) return false;
 
     var data = JSON.stringify(payload);
 
     // Try navigator.sendBeacon first (best for page unload)
     if (navigator.sendBeacon) {
-      var blob = new Blob([data], { type: "application/json" });
-      navigator.sendBeacon(config.endpoint, blob);
-      return;
+      try {
+        var blob = new Blob([data], { type: "application/json" });
+        if (navigator.sendBeacon(config.endpoint, blob)) return true;
+      } catch (e) {
+        // Fall through to fetch/XMLHttpRequest.
+      }
     }
 
     // Fallback to fetch for browsers without sendBeacon
@@ -72,7 +97,7 @@
       }).catch(function () {
         // Silently fail, analytics shouldn't break the page
       });
-      return;
+      return true;
     }
 
     // Final fallback to XMLHttpRequest
@@ -81,9 +106,12 @@
       xhr.open("POST", config.endpoint, true);
       xhr.setRequestHeader("Content-Type", "application/json");
       xhr.send(data);
+      return true;
     } catch (e) {
       // Silently fail
     }
+
+    return false;
   }
 
   function absoluteUrl(path) {
@@ -120,7 +148,7 @@
     var count = 0;
     for (var key in props) {
       if (!Object.prototype.hasOwnProperty.call(props, key)) continue;
-      if (count >= 20) break;
+      if (count >= 10) break;
 
       var cleanKey = String(key).slice(0, 64);
       if (!cleanKey) continue;
@@ -163,9 +191,11 @@
   // Track a pageview
   function trackPageview(opts) {
     opts = opts || {};
+    if (!shouldTrack()) return;
 
     // Get current page (with hash if hash-mode is enabled)
-    var currentPage = window.location.pathname + window.location.search;
+    var currentPage =
+      opts.path || window.location.pathname + window.location.search;
     if (config.hashMode) {
       currentPage += window.location.hash;
     }
@@ -175,9 +205,6 @@
       return;
     }
 
-    lastPage = currentPage;
-    tracked = true;
-
     var payload = buildPayload({
       path: currentPage,
       name: "pageview",
@@ -185,7 +212,10 @@
       session: sessionMarker(),
     });
 
-    sendBeacon(payload);
+    if (sendBeacon(payload)) {
+      lastPage = currentPage;
+      tracked = true;
+    }
   }
 
   // Track a custom event
@@ -201,6 +231,21 @@
     sendBeacon(payload);
   }
 
+  function scheduleScrollDepth() {
+    if (scrollQueued) return;
+
+    scrollQueued = true;
+    var schedule =
+      window.requestAnimationFrame ||
+      function (callback) {
+        return setTimeout(callback, 100);
+      };
+    schedule(function () {
+      scrollQueued = false;
+      updateScrollDepth();
+    });
+  }
+
   function updateEngagement() {
     if (document.hidden) return;
 
@@ -211,7 +256,7 @@
 
   function updateScrollDepth() {
     var doc = document.documentElement;
-    var body = document.body;
+    var body = document.body || doc;
     var scrollTop = window.pageYOffset || doc.scrollTop || body.scrollTop || 0;
     var viewport = window.innerHeight || doc.clientHeight || 0;
     var height = Math.max(
@@ -219,7 +264,7 @@
       body.offsetHeight,
       doc.clientHeight,
       doc.scrollHeight,
-      doc.offsetHeight
+      doc.offsetHeight,
     );
 
     if (!height || height <= viewport) {
@@ -232,7 +277,7 @@
   }
 
   function sendEngagement() {
-    if (!tracked) return;
+    if (!tracked || !config.engagement) return;
 
     updateEngagement();
     updateScrollDepth();
@@ -253,30 +298,39 @@
 
   // Track outbound link clicks
   function trackOutboundLink(event) {
-    var link = event.target.closest("a");
+    var link = closestLink(event.target);
     if (!link) return;
 
-    var url = link.getAttribute("href");
-    if (!url || url.indexOf("://") === -1) return;
+    var url;
+    try {
+      url = new URL(link.href, window.location.href);
+    } catch (e) {
+      return;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") return;
 
     // Check if external
-    var linkHostname = link.hostname;
-    if (linkHostname === window.location.hostname) return;
+    if (url.hostname === window.location.hostname) return;
 
     // Track as custom event
     trackEvent("Outbound Link: Click", {
       path: window.location.pathname,
-      props: { url: url },
+      props: { url: url.href },
     });
   }
 
   // Track file downloads
   function trackFileDownload(event) {
-    var link = event.target.closest("a");
+    var link = closestLink(event.target);
     if (!link) return;
 
-    var href = link.getAttribute("href");
-    if (!href) return;
+    var url;
+    try {
+      url = new URL(link.href, window.location.href);
+    } catch (e) {
+      return;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") return;
 
     // Common file extensions.
     // FIXME: this needs to be more robust in the future
@@ -294,8 +348,9 @@
     ];
 
     var isDownload = false;
+    var path = url.pathname.toLowerCase();
     for (var i = 0; i < extensions.length; i++) {
-      if (href.toLowerCase().indexOf(extensions[i]) !== -1) {
+      if (path.slice(-extensions[i].length) === extensions[i]) {
         isDownload = true;
         break;
       }
@@ -306,8 +361,16 @@
     // Track as custom event
     trackEvent("File Download", {
       path: window.location.pathname,
-      props: { url: href },
+      props: { url: url.href },
     });
+  }
+
+  function closestLink(target) {
+    while (target && target !== document) {
+      if (target.tagName && target.tagName.toLowerCase() === "a") return target;
+      target = target.parentElement;
+    }
+    return null;
   }
 
   // Setup automatic tracking features
@@ -329,15 +392,17 @@
       document.addEventListener("click", trackFileDownload);
     }
 
-    window.addEventListener("scroll", updateScrollDepth, { passive: true });
-    window.addEventListener("pagehide", sendEngagement);
-    document.addEventListener("visibilitychange", function () {
-      if (document.hidden) {
-        sendEngagement();
-      } else {
-        engagementStartedAt = Date.now();
-      }
-    });
+    if (config.engagement) {
+      window.addEventListener("scroll", scheduleScrollDepth, { passive: true });
+      window.addEventListener("pagehide", sendEngagement);
+      document.addEventListener("visibilitychange", function () {
+        if (document.hidden) {
+          sendEngagement();
+        } else {
+          engagementStartedAt = Date.now();
+        }
+      });
+    }
   }
 
   // Expose public API
