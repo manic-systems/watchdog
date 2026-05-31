@@ -44,21 +44,22 @@ Simply import the NixOS module provided by this flake, and enable
 }
 ```
 
-The `settings` option is freeform, meaning it'll be serialized to the YAML
+The `settings` option is freeform, meaning it'll be serialized to the TOML
 configuration automatically.
 
 ### Systemd
 
-On non-NixOS distributions, you may build Watchdog with `go build` and copy it
-somewhere that's in your `PATH`. Usually this is `/usr/local/bin` for system
+On non-NixOS distributions, you may build Watchdog with `cargo build` and copy
+it somewhere that's in your `PATH`. Usually this is `/usr/local/bin` for system
 installations:
 
 ```bash
 # Build
-$ go build -o /usr/local/bin/watchdog .
+$ cargo build --release --locked
+$ sudo install -Dm755 target/release/watchdog /usr/local/bin/watchdog
 
 # Install service
-$ sudo install -Dm700 contrib/systemd/watchdog.service /etc/systemd/system/
+$ sudo install -Dm644 contrib/systemd/watchdog.service /etc/systemd/system/
 $ sudo systemctl daemon-reload
 $ sudo systemctl enable --now watchdog
 ```
@@ -72,52 +73,46 @@ installation mechanism.
 
 ```bash
 # Build
-$ go build -o watchdog .
+$ cargo build --release --locked
 
 # Run
-$ ./watchdog --config config.yaml
+$ ./target/release/watchdog --config config.toml
 ```
 
 ## Configuration
 
 [configuration reference]: docs/configuration.md
 
-Watchdog currently supports configuration via YAML file, environment variables
+Watchdog currently supports configuration via TOML file, environment variables
 or command-line flags. You may find a more complete reference in the
 [configuration reference] document.
 
-### Quick Start
+To get started, create `config.toml`:
 
-Create `config.yaml`:
+```toml
+[site]
+# Single-site analytics
+domains = ["example.com"]
 
-```yaml
-site:
-  # Single-site analytics
-  domains:
-    - "example.com"
+# Or multi-site analytics
+# domains = ["example.com", "blog.example.com", "shop.example.com"]
 
-  # Or multi-site analytics
-  # domains:
-  #   - "example.com"
-  #   - "blog.example.com"
-  #   - "shop.example.com"
+salt_rotation = "daily"
 
-  salt_rotation: "daily"
+[site.collect]
+pageviews = true
+device = true
+referrer = "domain"
+domain = false # Set to true for multi-site analytics
 
-  collect:
-    pageviews: true
-    device: true
-    referrer: "domain"
-    domain: false # Set to true for multi-site analytics
+[limits]
+max_paths = 10000
+max_sources = 500
+max_custom_events = 100
+max_events_per_minute = 10000
 
-limits:
-  max_paths: 10000
-  max_sources: 500
-  max_custom_events: 100
-  max_events_per_minute: 10000
-
-server:
-  listen_addr: "127.0.0.1:8080"
+[server]
+listen_addr = "127.0.0.1:8080"
 ```
 
 ## Usage
@@ -219,7 +214,6 @@ While not final, some of the metrics collected are as follows:
 
 - `watchdog_build_info{version,commit,build_date}` - Build metadata
 - `watchdog_start_time_seconds` - Unix timestamp of process start
-- `go_*` - Go runtime metrics (goroutines, GC, memory)
 - `process_*` - OS process metrics (CPU, RSS, file descriptors)
 
 ## Privacy
@@ -267,20 +261,20 @@ reproducible toolchain. The default shell already provides everything you need,
 so you can simply use `nix develop` or use `direnv allow` if you use Direnv.
 
 Once you have the dependencies, the workflow is relatively simple. Build and
-test with Go, and then with Nix to ensure packaging is correct.
+test with Cargo, and then with Nix to ensure packaging is correct.
 
 ```bash
 # Build binary
-$ go build -o watchdog .
+$ cargo build --release --locked
 
 # Run tests
-$ go test ./...
+$ cargo test --locked --all-targets
 
-# Run integration tests
-$ go test -tags=integration ./test/...
+# Run clippy
+$ cargo clippy --locked --all-targets -- -D warnings
 
 # Build with Nix
-$ nix build
+$ nix build --builders ""
 ```
 
 ### Testing
@@ -293,16 +287,13 @@ changes.
 
 ```bash
 # Unit tests
-$ go test ./...
+$ cargo test --locked --all-targets
 
-# Integration tests (requires build tag)
-$ go test -tags=integration ./test/...
-
-# Benchmarks
-$ go test -bench=. ./test/...
+# Lints
+$ cargo clippy --locked --all-targets -- -D warnings
 
 # Coverage
-$ go test -cover ./...
+$ cargo llvm-cov
 ```
 
 ## License
