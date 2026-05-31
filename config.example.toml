@@ -17,9 +17,16 @@ custom_events = ["signup", "purchase", "download"]
 
 [site.collect]
 pageviews = true
+sessions = true
+engagement = true
 country = false
 device = true
+browser = false
+os = false
+screen = false
 referrer = "domain" # "off", "domain", or "url"
+acquisition = false # UTM fields, click-id parameter names, and referrer source.
+properties = false  # Bounded custom event/pageview properties.
 domain = false      # Set true for multi-site metrics.
 
 [site.path]
@@ -33,6 +40,9 @@ normalize_trailing_slash = true
 max_paths = 10000
 max_sources = 500
 max_custom_events = 100
+max_dimension_values = 1000
+max_property_keys = 50
+max_property_values = 500
 max_events_per_minute = 10000
 max_metrics_per_minute = 60
 
