@@ -12,6 +12,7 @@ use crate::{
   limits::{SHUTDOWN_TIMEOUT, UNIQUES_UPDATE_PERIOD},
 };
 
+/// Runs the HTTP server until a shutdown signal is received.
 pub async fn run(config: Config, build_info: BuildInfo) -> anyhow::Result<()> {
   info!(domains = ?config.site.domains, "loaded configuration");
 

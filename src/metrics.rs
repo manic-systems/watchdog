@@ -17,6 +17,7 @@ use crate::{
   uniques::UniquesEstimator,
 };
 
+/// Dimension labels shared by pageview, event, session, and engagement metrics.
 #[derive(Debug, Clone, Default)]
 pub struct DimensionLabels {
   pub path:            String,
@@ -36,6 +37,7 @@ pub struct DimensionLabels {
   pub domain:          Option<String>,
 }
 
+/// Prometheus metric registry and bounded recording helpers.
 pub struct Metrics {
   registry:           Registry,
   pageviews:          CounterVec,
@@ -57,6 +59,8 @@ pub struct Metrics {
 }
 
 impl Metrics {
+  /// Creates a metrics registry configured from collection flags and build
+  /// metadata.
   pub fn new(
     config: &Config,
     build_info: &BuildInfo,
@@ -213,16 +217,19 @@ impl Metrics {
     })
   }
 
+  /// Returns the unique visitor estimator when unique tracking is enabled.
   pub fn uniques(&self) -> Option<Arc<UniquesEstimator>> {
     self.uniques.clone()
   }
 
+  /// Increments the pageview counter with configured dimension labels.
   pub fn record_pageview(&self, labels: &DimensionLabels) {
     let values = self.label_values(labels);
     let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
     self.pageviews.with_label_values(&refs).inc();
   }
 
+  /// Increments the non-pageview event counter with configured labels.
   pub fn record_event(&self, event_name: &str, labels: &DimensionLabels) {
     let mut values = vec![sanitize_label(event_name)];
     values.extend(self.label_values(labels));
@@ -230,6 +237,7 @@ impl Metrics {
     self.events.with_label_values(&refs).inc();
   }
 
+  /// Increments the aggregate custom-event counter by event name.
   pub fn record_custom_event(&self, event_name: &str) {
     let event_name = sanitize_label(event_name);
     self
@@ -238,12 +246,14 @@ impl Metrics {
       .inc();
   }
 
+  /// Increments the reported session-start counter.
   pub fn record_session(&self, labels: &DimensionLabels) {
     let values = self.label_values(labels);
     let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
     self.sessions.with_label_values(&refs).inc();
   }
 
+  /// Adds positive finite engagement seconds to the engagement counter.
   pub fn record_engagement_seconds(
     &self,
     labels: &DimensionLabels,
@@ -261,6 +271,7 @@ impl Metrics {
       .inc_by(seconds);
   }
 
+  /// Increments the bucketed scroll-depth counter.
   pub fn record_scroll_depth(&self, labels: &DimensionLabels, depth: u8) {
     let mut values = self.label_values(labels);
     values.push(scroll_depth_bucket(depth).to_owned());
@@ -268,6 +279,7 @@ impl Metrics {
     self.scroll_depth.with_label_values(&refs).inc();
   }
 
+  /// Increments the custom-property observation counter.
   pub fn record_custom_property(
     &self,
     event_name: &str,
@@ -283,18 +295,25 @@ impl Metrics {
       .inc();
   }
 
+  /// Records that a path was dropped because the path registry was full.
   pub fn record_path_overflow(&self) {
     self.path_overflow.inc();
   }
 
+  /// Records that a referrer was collapsed because the referrer registry was
+  /// full.
   pub fn record_referrer_overflow(&self) {
     self.referrer_overflow.inc();
   }
 
+  /// Records that a custom event was collapsed because the event registry was
+  /// full.
   pub fn record_event_overflow(&self) {
     self.event_overflow.inc();
   }
 
+  /// Records that a named dimension value was collapsed because its registry
+  /// was full.
   pub fn record_dimension_overflow(&self, dimension: &str) {
     self
       .dimension_overflow
@@ -302,22 +321,26 @@ impl Metrics {
       .inc();
   }
 
+  /// Records a blocked embedded-asset request by reason.
   pub fn record_blocked_request(&self, reason: &'static str) {
     self.blocked_requests.with_label_values(&[reason]).inc();
   }
 
+  /// Adds a visitor observation to the unique visitor estimator, if enabled.
   pub fn add_unique(&self, ip: &str, user_agent: &str) {
     if let Some(uniques) = &self.uniques {
       uniques.add(ip, user_agent);
     }
   }
 
+  /// Updates the exported unique visitor gauge from the estimator.
   pub fn update_unique_gauge(&self) {
     if let Some(uniques) = &self.uniques {
       self.daily_uniques.set(uniques.estimate());
     }
   }
 
+  /// Encodes all registered metrics in Prometheus text format.
   pub fn encode(&self) -> Result<String, prometheus::Error> {
     self.update_unique_gauge();
 
@@ -436,8 +459,10 @@ fn scroll_depth_bucket(depth: u8) -> &'static str {
   }
 }
 
+/// Sanitizes a user-controlled value before it is used as a Prometheus label.
 pub fn sanitize_label(label: &str) -> String {
   const MAX_LABEL_VALUE_LEN: usize = 200;
+  let label = label.trim();
 
   if label.len() > MAX_LABEL_VALUE_LEN || label.is_empty() {
     return "other".to_owned();
@@ -464,6 +489,7 @@ mod tests {
       sanitize_label("Outbound Link: Click"),
       "Outbound Link: Click"
     );
+    assert_eq!(sanitize_label("  newsletter  "), "newsletter");
     assert_eq!(sanitize_label(""), "other");
   }
 
@@ -506,5 +532,8 @@ mod tests {
     assert!(body.contains("web_engagement_seconds_total"));
     assert!(body.contains("web_scroll_depth_total"));
     assert!(body.contains("web_custom_properties_total"));
+    assert!(body.contains("event=\"signup\""));
+    assert!(body.contains("depth=\"75\""));
+    assert!(body.contains("key=\"tier\",value=\"paid\""));
   }
 }

@@ -11,6 +11,7 @@ use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+/// Errors produced while loading or validating configuration.
 #[derive(Debug, Error)]
 pub enum ConfigError {
   #[error("failed to read configuration: {0}")]
@@ -49,6 +50,7 @@ pub enum ConfigError {
   ReservedServerPath { field: &'static str, path: String },
 }
 
+/// Complete runtime configuration for a Watchdog instance.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -58,6 +60,7 @@ pub struct Config {
   pub security: SecurityConfig,
 }
 
+/// Site-specific analytics behavior and collection controls.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SiteConfig {
@@ -82,6 +85,7 @@ impl Default for SiteConfig {
   }
 }
 
+/// Salt rotation period used for unique visitor estimates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SaltRotation {
@@ -90,6 +94,7 @@ pub enum SaltRotation {
 }
 
 impl SaltRotation {
+  /// Returns the TOML representation for this rotation period.
   pub fn as_str(self) -> &'static str {
     match self {
       Self::Daily => "daily",
@@ -98,6 +103,7 @@ impl SaltRotation {
   }
 }
 
+/// Feature flags for dimensions and event types collected into metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CollectConfig {
@@ -134,6 +140,7 @@ impl Default for CollectConfig {
   }
 }
 
+/// Referrer detail level retained in Prometheus labels.
 #[derive(
   Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize,
 )]
@@ -145,6 +152,7 @@ pub enum ReferrerMode {
   Url,
 }
 
+/// Path normalization options applied before recording metrics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PathConfig {
@@ -167,6 +175,7 @@ impl Default for PathConfig {
   }
 }
 
+/// Cardinality and rate limits used to bound metrics growth.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LimitsConfig {
@@ -197,6 +206,7 @@ impl Default for LimitsConfig {
   }
 }
 
+/// Screen-width breakpoints used for device and screen labels.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DeviceBreakpoints {
@@ -213,6 +223,7 @@ impl Default for DeviceBreakpoints {
   }
 }
 
+/// Security controls for trusted proxies, CORS, and metrics access.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SecurityConfig {
@@ -221,6 +232,7 @@ pub struct SecurityConfig {
   pub metrics_auth:    AuthConfig,
 }
 
+/// CORS policy for the event ingestion endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct CorsConfig {
@@ -228,6 +240,7 @@ pub struct CorsConfig {
   pub allowed_origins: Vec<String>,
 }
 
+/// Optional HTTP Basic authentication for the metrics endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuthConfig {
@@ -236,6 +249,7 @@ pub struct AuthConfig {
   pub password: String,
 }
 
+/// HTTP listener, endpoint, and state-file settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
@@ -256,6 +270,7 @@ impl Default for ServerConfig {
   }
 }
 
+/// Command-line overrides applied after file and environment loading.
 #[derive(Debug, Default)]
 pub struct Overrides {
   pub listen_addr:    Option<String>,
@@ -263,6 +278,8 @@ pub struct Overrides {
   pub ingestion_path: Option<String>,
 }
 
+/// Loads configuration from defaults, an optional TOML file, environment, and
+/// explicit command-line overrides.
 pub fn load(
   path: Option<&Path>,
   overrides: Overrides,
@@ -302,6 +319,7 @@ fn default_config_path() -> Option<PathBuf> {
 }
 
 impl Config {
+  /// Normalizes and validates the configuration in place.
   pub fn validate(&mut self) -> Result<(), ConfigError> {
     self.site.domains = self
       .site

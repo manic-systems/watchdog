@@ -1,3 +1,6 @@
+//! Library entry points for Watchdog's HTTP server, configuration, and
+//! aggregate metrics pipeline.
+
 pub mod app;
 pub mod config;
 pub mod event;
@@ -8,14 +11,19 @@ pub mod registry;
 pub mod server;
 pub mod uniques;
 
+/// Build metadata exposed through metrics and logs.
 #[derive(Debug, Clone)]
 pub struct BuildInfo {
+  /// Package version compiled into the binary.
   pub version:    String,
+  /// Source revision supplied by the build environment, if available.
   pub commit:     String,
+  /// Build timestamp supplied by the build environment, if available.
   pub build_date: String,
 }
 
 impl BuildInfo {
+  /// Returns build metadata embedded at compile time.
   pub fn current() -> Self {
     Self {
       version:    env!("CARGO_PKG_VERSION").to_owned(),
