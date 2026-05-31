@@ -31,6 +31,8 @@ pub enum ConfigError {
   InvalidMaxPropertyKeys,
   #[error("limits.max_property_values must be greater than 0")]
   InvalidMaxPropertyValues,
+  #[error("limits.device_breakpoints must satisfy 0 < mobile < tablet")]
+  InvalidDeviceBreakpoints,
   #[error(
     "security.metrics_auth: username and password are required when enabled"
   )]
@@ -41,37 +43,41 @@ pub enum ConfigError {
   InvalidTrustedProxy(String),
   #[error("server.{field} must start with '/'")]
   InvalidServerPath { field: &'static str },
+  #[error("server.metrics_path and server.ingestion_path must be distinct")]
+  DuplicateServerPath,
+  #[error("server.{field} conflicts with reserved route {path}")]
+  ReservedServerPath { field: &'static str, path: String },
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-  pub site: SiteConfig,
-  pub limits: LimitsConfig,
-  pub server: ServerConfig,
+  pub site:     SiteConfig,
+  pub limits:   LimitsConfig,
+  pub server:   ServerConfig,
   pub security: SecurityConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SiteConfig {
-  pub domains: Vec<String>,
+  pub domains:       Vec<String>,
   pub salt_rotation: Option<SaltRotation>,
-  pub sampling: f64,
-  pub collect: CollectConfig,
+  pub sampling:      f64,
+  pub collect:       CollectConfig,
   pub custom_events: Vec<String>,
-  pub path: PathConfig,
+  pub path:          PathConfig,
 }
 
 impl Default for SiteConfig {
   fn default() -> Self {
     Self {
-      domains: Vec::new(),
+      domains:       Vec::new(),
       salt_rotation: Some(SaltRotation::Daily),
-      sampling: 1.0,
-      collect: CollectConfig::default(),
+      sampling:      1.0,
+      collect:       CollectConfig::default(),
       custom_events: Vec::new(),
-      path: PathConfig::default(),
+      path:          PathConfig::default(),
     }
   }
 }
@@ -95,35 +101,35 @@ impl SaltRotation {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CollectConfig {
-  pub pageviews: bool,
-  pub sessions: bool,
-  pub engagement: bool,
-  pub country: bool,
-  pub device: bool,
-  pub browser: bool,
-  pub os: bool,
-  pub screen: bool,
-  pub referrer: ReferrerMode,
+  pub pageviews:   bool,
+  pub sessions:    bool,
+  pub engagement:  bool,
+  pub country:     bool,
+  pub device:      bool,
+  pub browser:     bool,
+  pub os:          bool,
+  pub screen:      bool,
+  pub referrer:    ReferrerMode,
   pub acquisition: bool,
-  pub properties: bool,
-  pub domain: bool,
+  pub properties:  bool,
+  pub domain:      bool,
 }
 
 impl Default for CollectConfig {
   fn default() -> Self {
     Self {
-      pageviews: true,
-      sessions: true,
-      engagement: true,
-      country: false,
-      device: true,
-      browser: false,
-      os: false,
-      screen: false,
-      referrer: ReferrerMode::Domain,
+      pageviews:   true,
+      sessions:    true,
+      engagement:  true,
+      country:     false,
+      device:      true,
+      browser:     false,
+      os:          false,
+      screen:      false,
+      referrer:    ReferrerMode::Domain,
       acquisition: false,
-      properties: false,
-      domain: false,
+      properties:  false,
+      domain:      false,
     }
   }
 }
@@ -142,21 +148,21 @@ pub enum ReferrerMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PathConfig {
-  pub strip_query: bool,
-  pub strip_fragment: bool,
+  pub strip_query:               bool,
+  pub strip_fragment:            bool,
   pub collapse_numeric_segments: bool,
-  pub max_segments: usize,
-  pub normalize_trailing_slash: bool,
+  pub max_segments:              usize,
+  pub normalize_trailing_slash:  bool,
 }
 
 impl Default for PathConfig {
   fn default() -> Self {
     Self {
-      strip_query: true,
-      strip_fragment: true,
+      strip_query:               true,
+      strip_fragment:            true,
       collapse_numeric_segments: true,
-      max_segments: 5,
-      normalize_trailing_slash: true,
+      max_segments:              5,
+      normalize_trailing_slash:  true,
     }
   }
 }
@@ -164,29 +170,29 @@ impl Default for PathConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LimitsConfig {
-  pub max_paths: usize,
-  pub max_events_per_minute: u32,
-  pub max_sources: usize,
-  pub max_custom_events: usize,
-  pub max_dimension_values: usize,
-  pub max_property_keys: usize,
-  pub max_property_values: usize,
+  pub max_paths:              usize,
+  pub max_events_per_minute:  u32,
+  pub max_sources:            usize,
+  pub max_custom_events:      usize,
+  pub max_dimension_values:   usize,
+  pub max_property_keys:      usize,
+  pub max_property_values:    usize,
   pub max_metrics_per_minute: u32,
-  pub device_breakpoints: DeviceBreakpoints,
+  pub device_breakpoints:     DeviceBreakpoints,
 }
 
 impl Default for LimitsConfig {
   fn default() -> Self {
     Self {
-      max_paths: 10_000,
-      max_events_per_minute: 10_000,
-      max_sources: 500,
-      max_custom_events: 100,
-      max_dimension_values: 1_000,
-      max_property_keys: 50,
-      max_property_values: 500,
+      max_paths:              10_000,
+      max_events_per_minute:  10_000,
+      max_sources:            500,
+      max_custom_events:      100,
+      max_dimension_values:   1_000,
+      max_property_keys:      50,
+      max_property_values:    500,
       max_metrics_per_minute: 60,
-      device_breakpoints: DeviceBreakpoints::default(),
+      device_breakpoints:     DeviceBreakpoints::default(),
     }
   }
 }
@@ -211,21 +217,21 @@ impl Default for DeviceBreakpoints {
 #[serde(default, deny_unknown_fields)]
 pub struct SecurityConfig {
   pub trusted_proxies: Vec<String>,
-  pub cors: CorsConfig,
-  pub metrics_auth: AuthConfig,
+  pub cors:            CorsConfig,
+  pub metrics_auth:    AuthConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct CorsConfig {
-  pub enabled: bool,
+  pub enabled:         bool,
   pub allowed_origins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuthConfig {
-  pub enabled: bool,
+  pub enabled:  bool,
   pub username: String,
   pub password: String,
 }
@@ -233,27 +239,27 @@ pub struct AuthConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
-  pub listen_addr: String,
-  pub metrics_path: String,
+  pub listen_addr:    String,
+  pub metrics_path:   String,
   pub ingestion_path: String,
-  pub state_path: String,
+  pub state_path:     String,
 }
 
 impl Default for ServerConfig {
   fn default() -> Self {
     Self {
-      listen_addr: "127.0.0.1:8080".to_owned(),
-      metrics_path: "/metrics".to_owned(),
+      listen_addr:    "127.0.0.1:8080".to_owned(),
+      metrics_path:   "/metrics".to_owned(),
       ingestion_path: "/api/event".to_owned(),
-      state_path: "/var/lib/watchdog/hll.state".to_owned(),
+      state_path:     "/var/lib/watchdog/hll.state".to_owned(),
     }
   }
 }
 
 #[derive(Debug, Default)]
 pub struct Overrides {
-  pub listen_addr: Option<String>,
-  pub metrics_path: Option<String>,
+  pub listen_addr:    Option<String>,
+  pub metrics_path:   Option<String>,
   pub ingestion_path: Option<String>,
 }
 
@@ -345,6 +351,14 @@ impl Config {
       return Err(ConfigError::InvalidMaxPropertyValues);
     }
 
+    if self.limits.device_breakpoints.mobile == 0
+      || self.limits.device_breakpoints.tablet == 0
+      || self.limits.device_breakpoints.mobile
+        >= self.limits.device_breakpoints.tablet
+    {
+      return Err(ConfigError::InvalidDeviceBreakpoints);
+    }
+
     if self.security.metrics_auth.enabled
       && (self.security.metrics_auth.username.is_empty()
         || self.security.metrics_auth.password.is_empty())
@@ -369,6 +383,14 @@ impl Config {
 
     validate_endpoint_path("metrics_path", &self.server.metrics_path)?;
     validate_endpoint_path("ingestion_path", &self.server.ingestion_path)?;
+    if self.server.metrics_path == self.server.ingestion_path {
+      return Err(ConfigError::DuplicateServerPath);
+    }
+    validate_reserved_endpoint_path("metrics_path", &self.server.metrics_path)?;
+    validate_reserved_endpoint_path(
+      "ingestion_path",
+      &self.server.ingestion_path,
+    )?;
 
     Ok(())
   }
@@ -382,6 +404,20 @@ fn validate_endpoint_path(
     Ok(())
   } else {
     Err(ConfigError::InvalidServerPath { field })
+  }
+}
+
+fn validate_reserved_endpoint_path(
+  field: &'static str,
+  path: &str,
+) -> Result<(), ConfigError> {
+  if path == "/health" || path == "/web" || path.starts_with("/web/") {
+    Err(ConfigError::ReservedServerPath {
+      field,
+      path: path.to_owned(),
+    })
+  } else {
+    Ok(())
   }
 }
 
@@ -423,6 +459,27 @@ mod tests {
     assert!(matches!(
       config.validate(),
       Err(ConfigError::InvalidMaxDimensionValues)
+    ));
+
+    config.limits.max_dimension_values = 1;
+    config.limits.device_breakpoints.mobile = 1024;
+    config.limits.device_breakpoints.tablet = 768;
+    assert!(matches!(
+      config.validate(),
+      Err(ConfigError::InvalidDeviceBreakpoints)
+    ));
+
+    config.limits.device_breakpoints = DeviceBreakpoints::default();
+    config.server.ingestion_path = "/metrics".to_owned();
+    assert!(matches!(
+      config.validate(),
+      Err(ConfigError::DuplicateServerPath)
+    ));
+
+    config.server.ingestion_path = "/web/beacon.js".to_owned();
+    assert!(matches!(
+      config.validate(),
+      Err(ConfigError::ReservedServerPath { .. })
     ));
   }
 

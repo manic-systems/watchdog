@@ -187,8 +187,8 @@ ExecStart=/usr/local/bin/watchdog --config /etc/watchdog/config.toml
 }
 ```
 
-The NixOS module serializes `settings` as TOML and defaults
-`server.state_path` to the module `stateDir`.
+The NixOS module serializes `settings` as TOML and defaults `server.state_path`
+to the module `stateDir`.
 
 ## Validation
 
@@ -197,6 +197,9 @@ Invalid configuration fails startup with a clear error. Common failures include:
 - Missing `site.domains`
 - `site.sampling` outside `0.0..=1.0`
 - Zero cardinality limits
+- Invalid device breakpoints where `mobile >= tablet`
 - Enabled CORS without `allowed_origins`
 - Enabled metrics auth without username or password
 - Endpoint paths that do not start with `/`
+- Duplicate metrics and ingestion paths
+- Endpoint paths that conflict with `/health` or `/web/*`
