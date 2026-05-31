@@ -10,6 +10,11 @@
     forEachSystem = nixpkgs.lib.genAttrs systems;
     pkgsForEach = nixpkgs.legacyPackages;
   in {
+    nixosModules = {
+      watchdog = import ./nix/module.nix self;
+      default = self.nixosModules.watchdog;
+    };
+
     packages = forEachSystem (system: {
       default = pkgsForEach.${system}.callPackage ./nix/package.nix {};
     });
@@ -28,8 +33,8 @@
           pkgs.fd
           pkgs.prettier
           pkgs.deno
-          pkgs.go # provides gofmt
-          pkgs.golines
+          pkgs.rustfmt
+          pkgs.taplo
         ];
 
         text = ''
@@ -42,18 +47,11 @@
           # Format Markdown with Deno's Markdown formatter
           fd "$@" -t f -e md -x deno fmt -q '{}'
 
-          # Format go files with both gofmt & golines
-          fd "$@" -t f -e go -x golines -l -w --max-len=110 \
-            --base-formatter=gofmt \
-            --shorten-comments \
-            --ignored-dirs=.direnv '{}'
+          # Format Rust and TOML files
+          fd "$@" -t f -e rs -x rustfmt '{}'
+          fd "$@" -t f -e toml -x taplo fmt '{}'
         '';
       });
-
-    nixosModules = {
-      watchdog = import ./nix/module.nix self;
-      default = self.nixosModules.watchdog;
-    };
 
     hydraJobs = self.packages;
   };
