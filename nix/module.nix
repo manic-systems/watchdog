@@ -37,9 +37,16 @@ in {
           sampling = 1.0;
           collect = {
             pageviews = true;
+            sessions = true;
+            engagement = true;
             country = false;
             device = true;
+            browser = false;
+            os = false;
+            screen = false;
             referrer = "domain";
+            acquisition = false;
+            properties = false;
           };
 
           path = {
@@ -55,6 +62,9 @@ in {
           max_paths = 10000;
           max_sources = 500;
           max_custom_events = 100;
+          max_dimension_values = 1000;
+          max_property_keys = 50;
+          max_property_values = 500;
           max_events_per_minute = 10000;
           device_breakpoints = {
             mobile = 768;
