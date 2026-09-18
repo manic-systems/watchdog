@@ -23,7 +23,7 @@ pub const HTTP_READ_TIMEOUT: Duration = Duration::from_secs(10);
 pub const HTTP_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Maximum time allowed for background tasks to stop during shutdown.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
-/// Interval for refreshing the exported unique visitor gauge.
+/// Interval for refreshing the unique visitor gauge and persisting HLL state.
 pub const UNIQUES_UPDATE_PERIOD: Duration = Duration::from_secs(10);
 /// Maximum Prometheus response size returned by the metrics endpoint.
 pub const MAX_METRICS_RESPONSE_SIZE: usize = 10 * 1024 * 1024;

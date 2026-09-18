@@ -154,7 +154,12 @@ fn spawn_unique_gauge_updater(
     let mut timer = interval(UNIQUES_UPDATE_PERIOD);
     loop {
       tokio::select! {
-          _ = timer.tick() => state.metrics().update_unique_gauge(),
+          _ = timer.tick() => {
+            state.metrics().update_unique_gauge();
+            if let Err(err) = state.save_state().await {
+              warn!(error = %err, "could not persist unique visitor state");
+            }
+          },
           () = shutdown.cancelled() => break,
       }
     }

@@ -105,8 +105,8 @@ impl UniquesEstimator {
   /// agent.
   #[inline]
   pub fn add(&self, ip: &str, user_agent: &str) {
+    self.rotate_if_needed();
     let mut inner = self.inner.lock();
-    inner.rotate_if_expired(self.rotation);
 
     let visitor_hash = hash_visitor(ip, user_agent, &inner.salt);
     inner.hll.insert(Element::from_hashed(visitor_hash));
@@ -115,8 +115,8 @@ impl UniquesEstimator {
   /// Returns the current estimated unique visitor count.
   #[inline]
   pub fn estimate(&self) -> f64 {
-    let mut inner = self.inner.lock();
-    inner.rotate_if_expired(self.rotation);
+    self.rotate_if_needed();
+    let inner = self.inner.lock();
     #[expect(
       clippy::cast_precision_loss,
       clippy::as_conversions,
@@ -125,6 +125,28 @@ impl UniquesEstimator {
     )]
     let estimate = inner.hll.estimate() as f64;
     estimate
+  }
+
+  /// Returns a serialized snapshot without holding the lock across I/O.
+  pub fn snapshot(&self) -> Result<Vec<u8>, UniqueStateError> {
+    self.rotate_if_needed();
+    let inner = self.inner.lock();
+    let persisted = PersistedUniquesRef {
+      salt_key: &inner.salt_key,
+      salt:     &inner.salt,
+      hll:      &inner.hll,
+    };
+    postcard::to_stdvec(&persisted).map_err(UniqueStateError::Serialize)
+  }
+
+  fn rotate_if_needed(&self) {
+    let current_key = salt_key(Timestamp::now(), self.rotation);
+    let mut inner = self.inner.lock();
+    if current_key != inner.salt_key {
+      inner.salt_key = current_key;
+      inner.salt = generate_salt(&inner.salt_key);
+      inner.hll = VisitorSketch::default();
+    }
   }
 
   /// Loads persisted state when it belongs to the current rotation period.
@@ -172,17 +194,7 @@ impl UniquesEstimator {
               cannot interleave a rotation between them"
   )]
   pub async fn save(&self, path: &Path) -> Result<(), UniqueStateError> {
-    let data = {
-      let mut inner = self.inner.lock();
-      inner.rotate_if_expired(self.rotation);
-
-      let persisted = PersistedUniquesRef {
-        salt_key: &inner.salt_key,
-        salt:     &inner.salt,
-        hll:      &inner.hll,
-      };
-      postcard::to_stdvec(&persisted).map_err(UniqueStateError::Serialize)?
-    };
+    let data = self.snapshot()?;
 
     if let Some(parent) = parent_dir(path) {
       fs::create_dir_all(parent)
@@ -190,16 +202,7 @@ impl UniquesEstimator {
         .map_err(UniqueStateError::Write)?;
     }
 
-    let temp_path = tmp_path(path);
-    if let Err(err) = fs::write(&temp_path, &data).await {
-      let _cleanup: Result<(), IoError> = fs::remove_file(&temp_path).await;
-      return Err(UniqueStateError::Write(err));
-    }
-    if let Err(err) = fs::rename(&temp_path, path).await {
-      let _cleanup: Result<(), IoError> = fs::remove_file(&temp_path).await;
-      return Err(UniqueStateError::Write(err));
-    }
-    Ok(())
+    write_atomic(path, &data).await
   }
 
   /// Returns the active salt for tests that verify state restoration.
@@ -208,6 +211,22 @@ impl UniquesEstimator {
   pub fn current_salt(&self) -> String {
     self.inner.lock().salt.clone()
   }
+}
+
+async fn write_atomic(
+  path: &Path,
+  data: &[u8],
+) -> Result<(), UniqueStateError> {
+  let temp_path = tmp_path(path);
+  if let Err(err) = tokio::fs::write(&temp_path, data).await {
+    let _ = tokio::fs::remove_file(&temp_path).await;
+    return Err(UniqueStateError::Write(err));
+  }
+  if let Err(err) = tokio::fs::rename(&temp_path, path).await {
+    let _ = tokio::fs::remove_file(&temp_path).await;
+    return Err(UniqueStateError::Write(err));
+  }
+  Ok(())
 }
 
 /// Returns the parent directory unless the path is a bare filename.

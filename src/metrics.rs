@@ -170,7 +170,7 @@ impl Metrics {
 
     let path_overflow = IntCounter::with_opts(Opts::new(
       "web_path_overflow_total",
-      "Paths rejected due to cardinality limit",
+      "Paths collapsed to other due to cardinality limit",
     ))?;
     let referrer_overflow = IntCounter::with_opts(Opts::new(
       "web_referrer_overflow_total",
@@ -358,12 +358,11 @@ impl Metrics {
     self.custom_properties.with_label_values(bounded).inc();
   }
 
-  /// Records that a path was dropped because the path registry was full.
+  /// Records that a path was collapsed because the path registry was full.
   #[inline]
   pub fn record_path_overflow(&self) {
     self.path_overflow.inc();
   }
-
   /// Records that a referrer was collapsed because the referrer registry was
   /// full.
   #[inline]
