@@ -1,4 +1,5 @@
 use std::{
+  net::SocketAddr,
   path::{Path, PathBuf},
   str::FromStr,
 };
@@ -10,12 +11,21 @@ use figment::{
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-
 /// Errors produced while loading or validating configuration.
 #[derive(Debug, Error)]
 pub enum ConfigError {
   #[error("failed to read configuration: {0}")]
   Extract(#[source] Box<figment::Error>),
+  #[error("configuration file not found: {0}")]
+  ConfigFileMissing(PathBuf),
+  #[error("server.listen_addr is not a valid socket address: {0}")]
+  InvalidListenAddr(String),
+  #[error("server.{field} contains unsupported characters")]
+  InvalidServerPathChars { field: &'static str },
+  #[error("limits.max_events_per_minute must be greater than 0")]
+  InvalidMaxEventsPerMinute,
+  #[error("limits.max_metrics_per_minute must be greater than 0")]
+  InvalidMaxMetricsPerMinute,
   #[error("site.domains is required")]
   MissingDomains,
   #[error("site.sampling must be between 0.0 and 1.0")]
@@ -286,9 +296,12 @@ pub fn load(
 ) -> Result<Config, ConfigError> {
   let mut figment = Figment::from(Serialized::defaults(Config::default()));
 
-  let config_path = path.map(Path::to_path_buf).or_else(default_config_path);
-
-  if let Some(path) = config_path {
+  if let Some(path) = path {
+    if !path.exists() {
+      return Err(ConfigError::ConfigFileMissing(path.to_path_buf()));
+    }
+    figment = figment.merge(Toml::file(path));
+  } else if let Some(path) = default_config_path() {
     figment = figment.merge(Toml::file(path));
   }
 
@@ -369,6 +382,20 @@ impl Config {
       return Err(ConfigError::InvalidMaxPropertyValues);
     }
 
+    if self.limits.max_events_per_minute == 0 {
+      return Err(ConfigError::InvalidMaxEventsPerMinute);
+    }
+
+    if self.limits.max_metrics_per_minute == 0 {
+      return Err(ConfigError::InvalidMaxMetricsPerMinute);
+    }
+
+    if self.server.listen_addr.parse::<SocketAddr>().is_err() {
+      return Err(ConfigError::InvalidListenAddr(
+        self.server.listen_addr.clone(),
+      ));
+    }
+
     if self.limits.device_breakpoints.mobile == 0
       || self.limits.device_breakpoints.tablet == 0
       || self.limits.device_breakpoints.mobile
@@ -418,11 +445,16 @@ fn validate_endpoint_path(
   field: &'static str,
   path: &str,
 ) -> Result<(), ConfigError> {
-  if path.starts_with('/') {
-    Ok(())
-  } else {
-    Err(ConfigError::InvalidServerPath { field })
+  if !path.starts_with('/') {
+    return Err(ConfigError::InvalidServerPath { field });
   }
+  let supported = path
+    .chars()
+    .all(|char| char.is_ascii_alphanumeric() || "-._~/".contains(char));
+  if !supported {
+    return Err(ConfigError::InvalidServerPathChars { field });
+  }
+  Ok(())
 }
 
 fn validate_reserved_endpoint_path(
@@ -520,5 +552,47 @@ mod tests {
     let config = load(Some(&path), Overrides::default()).unwrap();
     assert_eq!(config.server.listen_addr, "127.0.0.1:9090");
     assert_eq!(config.limits.max_paths, 10_000);
+  }
+
+  #[test]
+  fn rejects_zero_rate_limits_bad_listen_addr_and_route_chars() {
+    let mut config = Config::default();
+    config.site.domains = vec!["example.com".to_owned()];
+
+    config.limits.max_events_per_minute = 0;
+    assert!(matches!(
+      config.validate(),
+      Err(ConfigError::InvalidMaxEventsPerMinute)
+    ));
+    config.limits.max_events_per_minute = 1;
+
+    config.limits.max_metrics_per_minute = 0;
+    assert!(matches!(
+      config.validate(),
+      Err(ConfigError::InvalidMaxMetricsPerMinute)
+    ));
+    config.limits.max_metrics_per_minute = 1;
+
+    config.server.listen_addr = "not-an-addr".to_owned();
+    assert!(matches!(
+      config.validate(),
+      Err(ConfigError::InvalidListenAddr(_))
+    ));
+    config.server.listen_addr = "127.0.0.1:8080".to_owned();
+
+    config.server.metrics_path = "/metrics/{id}".to_owned();
+    assert!(matches!(
+      config.validate(),
+      Err(ConfigError::InvalidServerPathChars { .. })
+    ));
+  }
+
+  #[test]
+  fn rejects_missing_explicit_config_file() {
+    let missing = Path::new("/nonexistent-watchdog-config.toml");
+    assert!(matches!(
+      load(Some(missing), Overrides::default()),
+      Err(ConfigError::ConfigFileMissing(_))
+    ));
   }
 }
