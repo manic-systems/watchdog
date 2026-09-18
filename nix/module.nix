@@ -19,6 +19,7 @@ in {
     enable = mkEnableOption "Watchdog privacy-preserving analytics";
 
     package = mkPackageOption self.packages.${pkgs.stdenv.hostPlatform.system} "watchdog" {
+      default = "default";
       pkgsText = "self.packages.\${pkgs.stdenv.hostPlatform.system}";
     };
 
