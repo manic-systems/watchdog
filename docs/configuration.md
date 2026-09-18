@@ -48,23 +48,14 @@ export WATCHDOG_SECURITY__METRICS_AUTH__PASSWORD="secret"
 
 Prefer TOML for arrays such as `site.domains` and `security.trusted_proxies`.
 
-## Command-Line Flags
-
 The CLI intentionally exposes only operational overrides:
 
 ```bash
-watchdog --listen-addr :9090
+watchdog --listen-addr 127.0.0.1:9090
 watchdog --metrics-path /prometheus/metrics
 watchdog --ingestion-path /api/v1/event
-watchdog --config prod.toml --listen-addr :9090
+watchdog --config prod.toml --listen-addr 127.0.0.1:9090
 ```
-
-Available flags:
-
-- `--config <path>`
-- `--listen-addr <addr>`
-- `--metrics-path <path>`
-- `--ingestion-path <path>`
 
 ## Reference
 
@@ -94,16 +85,23 @@ referrer = "domain" # "off", "domain", or "url"
 acquisition = false
 properties = false
 domain = false
+filter_bots = true # Drop requests with bot/crawler/spider user agents
+include_subdomains = false # Accept blog.example.com when example.com is listed
 ```
 
 `country = true` currently emits the `country="unknown"` label. It is retained
 as a stable configuration surface for future GeoIP enrichment.
 
-`sessions` counts client-reported session starts without storing or exporting a
-session identifier. `engagement` enables aggregate engagement seconds and scroll
-depth buckets. `acquisition` adds UTM labels, click-id parameter names, and
-referrer-source labels behind `limits.max_dimension_values`. `properties`
-records bounded custom properties as `key`/`value` labels.
+`referrer = "url"` keeps the referrer origin plus path with credentials,
+query, and fragment removed. Query strings never reach Prometheus labels.
+
+`sessions` counts client-reported tab session starts without storing or
+exporting a session identifier. These are per-tab markers, not Plausible-style
+30-minute visits, so the counts are not comparable across the two systems.
+`engagement` enables aggregate engagement seconds and scroll depth buckets.
+`acquisition` adds UTM labels, click-id parameter names, and referrer-source
+labels behind `limits.max_dimension_values`. `properties` records bounded
+custom properties as `key`/`value` labels.
 
 ### Path Normalization
 
@@ -115,6 +113,9 @@ collapse_numeric_segments = true
 max_segments = 5
 normalize_trailing_slash = true
 ```
+
+SPA hash routing (`data-hash-mode`) requires `strip_fragment = false`,
+otherwise the fragment is discarded during normalization.
 
 ### Limits
 
@@ -159,8 +160,6 @@ password = "changeme"
 Only requests arriving from `trusted_proxies` may use `X-Forwarded-For` or
 `X-Real-IP` for visitor estimation.
 
-### Server
-
 ```toml
 [server]
 listen_addr = "127.0.0.1:8080"
@@ -168,6 +167,11 @@ metrics_path = "/metrics"
 ingestion_path = "/api/event"
 state_path = "/var/lib/watchdog/hll.state"
 ```
+
+`listen_addr` must be a socket address with an explicit IP, such as
+`127.0.0.1:8080` or `[::1]:8080`. Bare `:9090` forms are rejected. Endpoint
+paths must start with `/`, use only `[A-Za-z0-9._~/~-]`, and avoid the
+reserved `/health` and `/web/*` routes.
 
 ## Systemd
 
@@ -202,10 +206,11 @@ Invalid configuration fails startup with a clear error. Common failures include:
 
 - Missing `site.domains`
 - `site.sampling` outside `0.0..=1.0`
-- Zero cardinality limits
+- Zero cardinality or rate limits
 - Invalid device breakpoints where `mobile >= tablet`
 - Enabled CORS without `allowed_origins`
 - Enabled metrics auth without username or password
-- Endpoint paths that do not start with `/`
+- `server.listen_addr` that is not a socket address with an explicit IP
+- Endpoint paths that do not start with `/` or use unsupported characters
 - Duplicate metrics and ingestion paths
 - Endpoint paths that conflict with `/health` or `/web/*`
