@@ -264,7 +264,9 @@ impl Event {
     }
     if let EngagementOrLegacyEvent::Engagement(seconds) =
       &self.engagement_or_legacy_event
-      && (!seconds.is_finite() || *seconds > MAX_ENGAGEMENT_SECONDS)
+      && (*seconds <= 0.0
+        || !seconds.is_finite()
+        || *seconds > MAX_ENGAGEMENT_SECONDS)
     {
       return Err(EventError::InvalidEngagement);
     }
@@ -396,5 +398,19 @@ mod tests {
       event.validate(|domain| domain == "example.com"),
       Err(EventError::DomainNotAllowed)
     );
+  }
+
+  #[test]
+  fn rejects_nonpositive_engagement() {
+    for payload in [
+      r#"{"d": "example.com", "p": "/", "e": -5}"#,
+      r#"{"d": "example.com", "p": "/", "e": 0}"#,
+    ] {
+      let event: Event = serde_json::from_str(payload).unwrap();
+      assert_eq!(
+        event.validate(|domain| domain == "example.com"),
+        Err(EventError::InvalidEngagement)
+      );
+    }
   }
 }
