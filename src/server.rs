@@ -77,13 +77,19 @@ fn spawn_unique_gauge_updater(
 async fn shutdown_signal(shutdown: CancellationToken) {
   #[cfg(unix)]
   {
-    let mut terminate =
-      tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        .expect("failed to install SIGTERM handler");
-
-    tokio::select! {
-        _ = tokio::signal::ctrl_c() => {},
-        _ = terminate.recv() => {},
+    match tokio::signal::unix::signal(
+      tokio::signal::unix::SignalKind::terminate(),
+    ) {
+      Ok(mut terminate) => {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => {},
+            _ = terminate.recv() => {},
+        }
+      },
+      Err(err) => {
+        warn!(error = %err, "could not install SIGTERM handler; waiting for Ctrl-C");
+        let _ = tokio::signal::ctrl_c().await;
+      },
     }
   }
 
