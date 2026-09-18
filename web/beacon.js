@@ -14,7 +14,12 @@
   }
 
   var config = {
-    endpoint: attr("data-api") || "/api/event",
+    endpoint:
+      attr("data-api") ||
+      new URL(
+        "/api/event",
+        (scriptEl && scriptEl.src) || window.location.href,
+      ).href,
     domain: attr("data-domain") || window.location.hostname,
     hashMode: hasAttr("data-hash-mode"),
     outboundLinks: hasAttr("data-outbound-links"),
@@ -24,6 +29,10 @@
     allowLocalhost: hasAttr("data-allow-localhost"),
     engagement: !hasAttr("data-disable-engagement"),
   };
+
+  var sameOriginEndpoint =
+    new URL(config.endpoint, document.baseURI || window.location.href).origin ===
+    window.location.origin;
 
   var pageview = null;
   var lastPage = null;
@@ -77,7 +86,7 @@
     var data = JSON.stringify(payload);
 
     // Try navigator.sendBeacon first (best for page unload)
-    if (navigator.sendBeacon) {
+    if (navigator.sendBeacon && sameOriginEndpoint) {
       try {
         var blob = new Blob([data], { type: "application/json" });
         if (navigator.sendBeacon(config.endpoint, blob)) return true;
@@ -92,6 +101,7 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: data,
+        credentials: "omit",
         keepalive: true,
       }).catch(function () {
         // Silently fail, analytics shouldn't break the page
