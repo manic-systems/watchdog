@@ -15,6 +15,8 @@ cardinality-estimator-safe = { version = "4.0.3", features = [ "with_serde" ] }
 clap                      = { version = "4.6.7", features = [ "derive" ] }
 figment                   = { version = "0.10.19", features = [ "env", "toml" ] }
 hex                       = "0.4.3"
+hyper                     = { version = "1.10.1", features = [ "http1", "server" ] }
+hyper-util                = { version = "0.1.20", features = [ "service", "tokio" ] }
 ipnet                     = "2.12.2"
 mime_guess                = "2.0.5"
 parking_lot               = "0.12.5"
@@ -28,9 +30,10 @@ subtle                    = "2.6.1"
 thiserror                 = "2.0.20"
 time                      = "0.3.55"
 tokio                     = { version = "1.53.1", features = [ "fs", "macros", "net", "rt-multi-thread", "signal", "time" ] }
+tokio-io-timeout           = "1.2.1"
 tokio-util                = { version = "0.7.19", features = [ "rt" ] }
 toml                      = "1.1.6"
-tower-http                = { version = "0.7.1", features = [ "cors", "trace" ] }
+tower-http                = { version = "0.7.1", features = [ "cors", "timeout", "trace" ] }
 tracing                   = "0.1.44"
 tracing-subscriber        = { version = "0.3.23", features = [ "env-filter" ] }
 url                       = "2.5.8"
