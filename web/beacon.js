@@ -42,6 +42,8 @@
   var maxScrollDepth = 0;
   var reportedScrollDepth = 0;
   var scrollQueued = false;
+  var textEncoder = new TextEncoder();
+  var textDecoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
   function lastScriptElement() {
     var scripts = document.getElementsByTagName("script");
@@ -95,6 +97,24 @@
   // Send analytics payload to server
   function sendBeacon(payload) {
     var data = JSON.stringify(payload);
+    var propertyKeys = payload.p ? Object.keys(payload.p) : [];
+    var removedProperties = false;
+
+    while (textEncoder.encode(data).length > 4096) {
+      if (!propertyKeys.length) {
+        console.warn("Watchdog event exceeds the 4096-byte payload limit");
+        return false;
+      }
+
+      delete payload.p[propertyKeys.pop()];
+      if (!propertyKeys.length) delete payload.p;
+      removedProperties = true;
+      data = JSON.stringify(payload);
+    }
+
+    if (removedProperties) {
+      console.warn("Watchdog dropped properties to fit the payload limit");
+    }
 
     // Try navigator.sendBeacon first (best for page unload)
     if (navigator.sendBeacon && sameOriginEndpoint) {
@@ -161,24 +181,30 @@
     return true;
   }
 
+  function truncateProperty(value, maxBytes) {
+    var bytes = new Uint8Array(maxBytes);
+    var encoded = textEncoder.encodeInto(value, bytes);
+    return textDecoder.decode(bytes.subarray(0, encoded.written));
+  }
+
   function cleanProps(props) {
     if (!props || typeof props !== "object") return null;
 
-    var cleaned = {};
+    var cleaned = Object.create(null);
     var count = 0;
     for (var key in props) {
       if (!Object.prototype.hasOwnProperty.call(props, key)) continue;
       if (count >= 10) break;
 
-      var cleanKey = String(key).slice(0, 64);
+      var cleanKey = truncateProperty(key, 64);
       if (!cleanKey) continue;
 
       var value = props[key];
       if (typeof value === "string") {
-        value = value.slice(0, 200);
+        value = truncateProperty(value, 200);
       } else if (typeof value !== "number" && typeof value !== "boolean") {
         if (value === null || value === undefined) continue;
-        value = String(value).slice(0, 200);
+        value = truncateProperty(String(value), 200);
       }
 
       cleaned[cleanKey] = value;
