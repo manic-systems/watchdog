@@ -283,7 +283,7 @@
       pageview = payload;
 
       if (config.engagement && !document.hidden) {
-        engagementStartedAt = Date.now();
+        engagementStartedAt = window.performance.now();
         updateScrollDepth();
       }
     }
@@ -322,7 +322,7 @@
   function updateEngagement() {
     if (engagementStartedAt === null) return;
 
-    var now = Date.now();
+    var now = window.performance.now();
     engagementMs += now - engagementStartedAt;
     engagementStartedAt = document.hidden ? null : now;
   }
@@ -355,21 +355,23 @@
     if (!pageview || !config.engagement) return;
 
     updateEngagement();
-    var scrollDepth = maxScrollDepth > reportedScrollDepth ? maxScrollDepth : 0;
 
-    if (engagementMs < 1000 && scrollDepth === 0) return;
+    while (engagementMs >= 1000 || maxScrollDepth > reportedScrollDepth) {
+      var scrollDepth =
+        maxScrollDepth > reportedScrollDepth ? maxScrollDepth : 0;
+      var milliseconds = Math.min(engagementMs, 86400000);
+      var seconds = Math.round(milliseconds / 100) / 10;
+      var payload = buildPayload({
+        url: pageview.u,
+        referrer: pageview.r,
+        name: "engagement",
+        engagementSeconds: seconds,
+        scrollDepth: scrollDepth,
+      });
 
-    var seconds = Math.round(engagementMs / 100) / 10;
-    var payload = buildPayload({
-      url: pageview.u,
-      referrer: pageview.r,
-      name: "engagement",
-      engagementSeconds: seconds,
-      scrollDepth: scrollDepth,
-    });
+      if (!sendBeacon(payload)) return;
 
-    if (sendBeacon(payload)) {
-      engagementMs = 0;
+      engagementMs -= milliseconds;
       reportedScrollDepth = maxScrollDepth;
     }
   }
@@ -481,7 +483,7 @@
         if (document.hidden) {
           pauseEngagement();
         } else if (pageview) {
-          engagementStartedAt = Date.now();
+          engagementStartedAt = window.performance.now();
           updateScrollDepth();
         }
       });
