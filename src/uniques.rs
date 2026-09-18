@@ -51,6 +51,19 @@ struct UniquesInner {
   hll:      VisitorSketch,
 }
 
+impl UniquesInner {
+  fn rotate_if_expired(&mut self, rotation: SaltRotation) {
+    let current_key = salt_key(OffsetDateTime::now_utc(), rotation);
+    if current_key == self.salt_key {
+      return;
+    }
+
+    self.salt = generate_salt(&current_key);
+    self.salt_key = current_key;
+    self.hll = VisitorSketch::default();
+  }
+}
+
 impl UniquesEstimator {
   /// Creates a new estimator for the configured salt rotation period.
   pub fn new(rotation: SaltRotation) -> Self {
@@ -69,12 +82,7 @@ impl UniquesEstimator {
   /// agent.
   pub fn add(&self, ip: &str, user_agent: &str) {
     let mut inner = self.inner.lock();
-    let current_key = salt_key(OffsetDateTime::now_utc(), self.rotation);
-    if current_key != inner.salt_key {
-      inner.salt_key = current_key;
-      inner.salt = generate_salt(&inner.salt_key);
-      inner.hll = VisitorSketch::default();
-    }
+    inner.rotate_if_expired(self.rotation);
 
     let visitor_hash = hash_visitor(ip, user_agent, &inner.salt);
     inner.hll.insert(Element::from_hashed(visitor_hash));
@@ -82,7 +90,9 @@ impl UniquesEstimator {
 
   /// Returns the current estimated unique visitor count.
   pub fn estimate(&self) -> f64 {
-    self.inner.lock().hll.estimate() as f64
+    let mut inner = self.inner.lock();
+    inner.rotate_if_expired(self.rotation);
+    inner.hll.estimate() as f64
   }
 
   /// Loads persisted state when it belongs to the current rotation period.
@@ -95,18 +105,15 @@ impl UniquesEstimator {
 
     let persisted: PersistedUniques =
       postcard::from_bytes(&data).map_err(UniqueStateError::Deserialize)?;
-    let current_key = salt_key(OffsetDateTime::now_utc(), self.rotation);
 
     let mut inner = self.inner.lock();
-    if persisted.salt_key == current_key {
-      inner.salt_key = persisted.salt_key;
-      inner.salt = persisted.salt;
-      inner.hll = persisted.hll;
-    } else {
-      inner.salt_key = current_key;
-      inner.salt = generate_salt(&inner.salt_key);
-      inner.hll = VisitorSketch::default();
-    }
+    *inner = UniquesInner {
+      salt_key: persisted.salt_key,
+      salt:     persisted.salt,
+      hll:      persisted.hll,
+    };
+
+    inner.rotate_if_expired(self.rotation);
 
     Ok(())
   }
@@ -114,7 +121,9 @@ impl UniquesEstimator {
   /// Saves the current estimator state to disk.
   pub async fn save(&self, path: &Path) -> Result<(), UniqueStateError> {
     let data = {
-      let inner = self.inner.lock();
+      let mut inner = self.inner.lock();
+      inner.rotate_if_expired(self.rotation);
+
       let persisted = PersistedUniquesRef {
         salt_key: &inner.salt_key,
         salt:     &inner.salt,
