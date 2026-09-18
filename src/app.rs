@@ -379,7 +379,7 @@ fn record_properties(
       continue;
     }
 
-    let registry_key = format!("{key}={value}");
+    let registry_key = format!("{}:{key}{value}", key.len());
     let value = if state.inner.property_value_registry.add(&registry_key) {
       value
     } else {
