@@ -6,20 +6,19 @@ use std::{
 
 use parking_lot::Mutex;
 use prometheus::{
-  CounterVec,
   Encoder,
   Gauge,
   IntCounter,
-  IntCounterVec,
   Opts,
   Registry,
   TextEncoder,
-  core::Collector,
+  core::{AtomicF64, AtomicU64, Collector},
 };
 
 use crate::{
   BuildInfo,
   config::{CollectConfig, Config, ReferrerMode},
+  counters::CounterFamily,
   limits::MAX_METRICS_RESPONSE_SIZE,
   uniques::UniquesEstimator,
 };
@@ -47,20 +46,20 @@ pub struct DimensionLabels {
 /// Prometheus metric registry and bounded recording helpers.
 pub struct Metrics {
   registry:           Registry,
-  pageviews:          CounterVec,
-  events:             CounterVec,
-  custom_events:      CounterVec,
-  sessions:           CounterVec,
-  engagement_seconds: CounterVec,
-  scroll_depth:       IntCounterVec,
-  custom_properties:  IntCounterVec,
+  pageviews:          CounterFamily<AtomicF64>,
+  events:             CounterFamily<AtomicF64>,
+  custom_events:      CounterFamily<AtomicF64>,
+  sessions:           CounterFamily<AtomicF64>,
+  engagement_seconds: CounterFamily<AtomicF64>,
+  scroll_depth:       CounterFamily<AtomicU64>,
+  custom_properties:  CounterFamily<AtomicU64>,
   series_budget:      Mutex<SeriesBudget>,
   series_overflow:    IntCounter,
   path_overflow:      IntCounter,
   referrer_overflow:  IntCounter,
   event_overflow:     IntCounter,
-  dimension_overflow: IntCounterVec,
-  blocked_requests:   IntCounterVec,
+  dimension_overflow: CounterFamily<AtomicU64>,
+  blocked_requests:   CounterFamily<AtomicU64>,
   daily_uniques:      Gauge,
   label_names:        Vec<&'static str>,
   collect:            CollectConfig,
@@ -83,27 +82,27 @@ impl Metrics {
     let registry = Registry::new();
     let label_names = metric_label_names(&config.site.collect);
 
-    let pageviews = CounterVec::new(
+    let pageviews = CounterFamily::new(
       Opts::new("web_pageviews_total", "Total number of pageviews"),
       &label_names,
     )?;
 
     let mut event_label_names = vec!["event"];
     event_label_names.extend(label_names.iter().copied());
-    let events = CounterVec::new(
+    let events = CounterFamily::new(
       Opts::new("web_events_total", "Total number of non-pageview events"),
       &event_label_names,
     )?;
 
-    let custom_events = CounterVec::new(
+    let custom_events = CounterFamily::new(
       Opts::new("web_custom_events_total", "Total number of custom events"),
       &["event"],
     )?;
-    let sessions = CounterVec::new(
+    let sessions = CounterFamily::new(
       Opts::new("web_sessions_total", "Total number of reported sessions"),
       &label_names,
     )?;
-    let engagement_seconds = CounterVec::new(
+    let engagement_seconds = CounterFamily::new(
       Opts::new(
         "web_engagement_seconds_total",
         "Total active engagement time reported by clients",
@@ -113,7 +112,7 @@ impl Metrics {
 
     let mut scroll_label_names = label_names.clone();
     scroll_label_names.push("depth");
-    let scroll_depth = IntCounterVec::new(
+    let scroll_depth = CounterFamily::new(
       Opts::new(
         "web_scroll_depth_total",
         "Total scroll-depth reports bucketed by percentage",
@@ -121,7 +120,7 @@ impl Metrics {
       &scroll_label_names,
     )?;
 
-    let custom_properties = IntCounterVec::new(
+    let custom_properties = CounterFamily::new(
       Opts::new(
         "web_custom_properties_total",
         "Bounded custom property observations by event",
@@ -146,14 +145,14 @@ impl Metrics {
       "web_event_overflow_total",
       "Custom events rejected due to cardinality limit",
     ))?;
-    let dimension_overflow = IntCounterVec::new(
+    let dimension_overflow = CounterFamily::new(
       Opts::new(
         "web_dimension_overflow_total",
         "Dimension values collapsed due to cardinality limit",
       ),
       &["dimension"],
     )?;
-    let blocked_requests = IntCounterVec::new(
+    let blocked_requests = CounterFamily::new(
       Opts::new(
         "web_blocked_requests_total",
         "Embedded web asset requests blocked by security filters",
@@ -248,30 +247,30 @@ impl Metrics {
   /// Increments the pageview counter with configured dimension labels.
   pub fn record_pageview(&self, labels: &DimensionLabels) {
     let values = self.label_values(labels);
-    let refs = self.bounded_labels(&self.pageviews, &values);
-    self.pageviews.with_label_values(&refs).inc();
+    let bounded = self.bounded_labels(&self.pageviews, values);
+    self.pageviews.with_label_values(bounded).inc();
   }
 
   /// Increments the non-pageview event counter with configured labels.
   pub fn record_event(&self, event_name: &str, labels: &DimensionLabels) {
     let mut values = vec![sanitize_label(event_name)];
     values.extend(self.label_values(labels));
-    let refs = self.bounded_labels(&self.events, &values);
-    self.events.with_label_values(&refs).inc();
+    let bounded = self.bounded_labels(&self.events, values);
+    self.events.with_label_values(bounded).inc();
   }
 
   /// Increments the aggregate custom-event counter by event name.
   pub fn record_custom_event(&self, event_name: &str) {
-    let values = [sanitize_label(event_name)];
-    let refs = self.bounded_labels(&self.custom_events, &values);
-    self.custom_events.with_label_values(&refs).inc();
+    let values = vec![sanitize_label(event_name)];
+    let bounded = self.bounded_labels(&self.custom_events, values);
+    self.custom_events.with_label_values(bounded).inc();
   }
 
   /// Increments the reported session-start counter.
   pub fn record_session(&self, labels: &DimensionLabels) {
     let values = self.label_values(labels);
-    let refs = self.bounded_labels(&self.sessions, &values);
-    self.sessions.with_label_values(&refs).inc();
+    let bounded = self.bounded_labels(&self.sessions, values);
+    self.sessions.with_label_values(bounded).inc();
   }
 
   /// Adds positive finite engagement seconds to the engagement counter.
@@ -285,10 +284,10 @@ impl Metrics {
     }
 
     let values = self.label_values(labels);
-    let refs = self.bounded_labels(&self.engagement_seconds, &values);
+    let bounded = self.bounded_labels(&self.engagement_seconds, values);
     self
       .engagement_seconds
-      .with_label_values(&refs)
+      .with_label_values(bounded)
       .inc_by(seconds);
   }
 
@@ -296,8 +295,8 @@ impl Metrics {
   pub fn record_scroll_depth(&self, labels: &DimensionLabels, depth: u8) {
     let mut values = self.label_values(labels);
     values.push(scroll_depth_bucket(depth).to_owned());
-    let refs = self.bounded_labels(&self.scroll_depth, &values);
-    self.scroll_depth.with_label_values(&refs).inc();
+    let bounded = self.bounded_labels(&self.scroll_depth, values);
+    self.scroll_depth.with_label_values(bounded).inc();
   }
 
   /// Increments the custom-property observation counter.
@@ -307,14 +306,14 @@ impl Metrics {
     key: &str,
     value: &str,
   ) {
-    let values = [
+    let values = vec![
       sanitize_label(event_name),
       sanitize_label(key),
       sanitize_label(value),
     ];
 
-    let refs = self.bounded_labels(&self.custom_properties, &values);
-    self.custom_properties.with_label_values(&refs).inc();
+    let bounded = self.bounded_labels(&self.custom_properties, values);
+    self.custom_properties.with_label_values(bounded).inc();
   }
 
   /// Records that a path was dropped because the path registry was full.
@@ -337,16 +336,16 @@ impl Metrics {
   /// Records that a named dimension value was collapsed because its registry
   /// was full.
   pub fn record_dimension_overflow(&self, dimension: &str) {
-    let values = [sanitize_label(dimension)];
-    let refs = self.bounded_labels(&self.dimension_overflow, &values);
-    self.dimension_overflow.with_label_values(&refs).inc();
+    let values = vec![sanitize_label(dimension)];
+    let bounded = self.bounded_labels(&self.dimension_overflow, values);
+    self.dimension_overflow.with_label_values(bounded).inc();
   }
 
   /// Records a blocked embedded-asset request by reason.
   pub fn record_blocked_request(&self, reason: &'static str) {
-    let values = [sanitize_label(reason)];
-    let refs = self.bounded_labels(&self.blocked_requests, &values);
-    self.blocked_requests.with_label_values(&refs).inc();
+    let values = vec![sanitize_label(reason)];
+    let bounded = self.bounded_labels(&self.blocked_requests, values);
+    self.blocked_requests.with_label_values(bounded).inc();
   }
 
   /// Adds a visitor observation to the unique visitor estimator, if enabled.
@@ -373,25 +372,25 @@ impl Metrics {
     Ok(String::from_utf8(buffer).unwrap_or_default())
   }
 
-  fn bounded_labels<'values>(
+  fn bounded_labels(
     &self,
     metric: &impl Collector,
-    values: &'values [String],
-  ) -> Vec<&'values str> {
+    values: Vec<String>,
+  ) -> Vec<String> {
     const METADATA_AND_OVERFLOW_RESERVE: usize = 64 * 1024;
     const MAX_ENCODED_F64_LEN: usize = 327;
 
     let descriptors = metric.desc();
     let descriptor = descriptors
       .first()
-      .expect("counter vectors have one descriptor");
+      .expect("counter families have one descriptor");
 
     let mut budget = self.series_budget.lock();
     let SeriesBudget { series, bytes } = &mut *budget;
     let entries = series.entry(descriptor.fq_name.clone()).or_default();
 
-    if entries.contains(values) {
-      return values.iter().map(String::as_str).collect();
+    if entries.contains(values.as_slice()) {
+      return values;
     }
 
     let encoded_bytes = descriptor.fq_name.len()
@@ -400,7 +399,7 @@ impl Metrics {
       + descriptor
         .variable_labels
         .iter()
-        .zip(values)
+        .zip(&values)
         .map(|(name, value)| name.len() + 4 + 2 * value.len())
         .sum::<usize>();
 
@@ -408,12 +407,12 @@ impl Metrics {
       > MAX_METRICS_RESPONSE_SIZE - METADATA_AND_OVERFLOW_RESERVE
     {
       self.series_overflow.inc();
-      return vec!["other"; values.len()];
+      return vec!["other".to_owned(); values.len()];
     }
 
-    entries.insert(values.to_vec());
+    entries.insert(values.clone());
     *bytes += encoded_bytes;
-    values.iter().map(String::as_str).collect()
+    values
   }
 
   fn label_values(&self, labels: &DimensionLabels) -> Vec<String> {
