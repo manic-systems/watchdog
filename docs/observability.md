@@ -207,6 +207,7 @@ rate(web_path_overflow_total[5m])
 rate(web_referrer_overflow_total[5m])
 rate(web_event_overflow_total[5m])
 rate(web_dimension_overflow_total[5m])
+rate(web_series_overflow_total[5m])
 ```
 
 ### Engagement

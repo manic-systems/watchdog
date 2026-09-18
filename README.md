@@ -247,6 +247,8 @@ Core metrics include:
 - `web_event_overflow_total` - Custom events rejected due to limit
 - `web_dimension_overflow_total{dimension}` - Rich dimensions collapsed due to
   limit
+- `web_series_overflow_total` - Metric observations collapsed due to the shared
+  series budget
 - `web_blocked_requests_total{reason}` - File server requests blocked by
   security filters
 

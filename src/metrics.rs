@@ -1,5 +1,10 @@
-use std::{collections::HashMap, sync::Arc, time::SystemTime};
+use std::{
+  collections::{HashMap, HashSet},
+  sync::Arc,
+  time::SystemTime,
+};
 
+use parking_lot::Mutex;
 use prometheus::{
   CounterVec,
   Encoder,
@@ -9,11 +14,13 @@ use prometheus::{
   Opts,
   Registry,
   TextEncoder,
+  core::Collector,
 };
 
 use crate::{
   BuildInfo,
   config::{CollectConfig, Config, ReferrerMode},
+  limits::MAX_METRICS_RESPONSE_SIZE,
   uniques::UniquesEstimator,
 };
 
@@ -47,6 +54,8 @@ pub struct Metrics {
   engagement_seconds: CounterVec,
   scroll_depth:       IntCounterVec,
   custom_properties:  IntCounterVec,
+  series_budget:      Mutex<SeriesBudget>,
+  series_overflow:    IntCounter,
   path_overflow:      IntCounter,
   referrer_overflow:  IntCounter,
   event_overflow:     IntCounter,
@@ -56,6 +65,12 @@ pub struct Metrics {
   label_names:        Vec<&'static str>,
   collect:            CollectConfig,
   uniques:            Option<Arc<UniquesEstimator>>,
+}
+
+#[derive(Default)]
+struct SeriesBudget {
+  series: HashMap<String, HashSet<Vec<String>>>,
+  bytes:  usize,
 }
 
 impl Metrics {
@@ -113,6 +128,11 @@ impl Metrics {
       ),
       &["event", "key", "value"],
     )?;
+
+    let series_overflow = IntCounter::with_opts(Opts::new(
+      "web_series_overflow_total",
+      "Metric observations collapsed due to the shared series budget",
+    ))?;
 
     let path_overflow = IntCounter::with_opts(Opts::new(
       "web_path_overflow_total",
@@ -176,6 +196,7 @@ impl Metrics {
       Box::new(engagement_seconds.clone()),
       Box::new(scroll_depth.clone()),
       Box::new(custom_properties.clone()),
+      Box::new(series_overflow.clone()),
       Box::new(path_overflow.clone()),
       Box::new(referrer_overflow.clone()),
       Box::new(event_overflow.clone()),
@@ -202,6 +223,8 @@ impl Metrics {
       engagement_seconds,
       scroll_depth,
       custom_properties,
+      series_budget: Mutex::new(SeriesBudget::default()),
+      series_overflow,
       path_overflow,
       referrer_overflow,
       event_overflow,
@@ -225,7 +248,7 @@ impl Metrics {
   /// Increments the pageview counter with configured dimension labels.
   pub fn record_pageview(&self, labels: &DimensionLabels) {
     let values = self.label_values(labels);
-    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
+    let refs = self.bounded_labels(&self.pageviews, &values);
     self.pageviews.with_label_values(&refs).inc();
   }
 
@@ -233,23 +256,21 @@ impl Metrics {
   pub fn record_event(&self, event_name: &str, labels: &DimensionLabels) {
     let mut values = vec![sanitize_label(event_name)];
     values.extend(self.label_values(labels));
-    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
+    let refs = self.bounded_labels(&self.events, &values);
     self.events.with_label_values(&refs).inc();
   }
 
   /// Increments the aggregate custom-event counter by event name.
   pub fn record_custom_event(&self, event_name: &str) {
-    let event_name = sanitize_label(event_name);
-    self
-      .custom_events
-      .with_label_values(&[event_name.as_str()])
-      .inc();
+    let values = [sanitize_label(event_name)];
+    let refs = self.bounded_labels(&self.custom_events, &values);
+    self.custom_events.with_label_values(&refs).inc();
   }
 
   /// Increments the reported session-start counter.
   pub fn record_session(&self, labels: &DimensionLabels) {
     let values = self.label_values(labels);
-    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
+    let refs = self.bounded_labels(&self.sessions, &values);
     self.sessions.with_label_values(&refs).inc();
   }
 
@@ -264,7 +285,7 @@ impl Metrics {
     }
 
     let values = self.label_values(labels);
-    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
+    let refs = self.bounded_labels(&self.engagement_seconds, &values);
     self
       .engagement_seconds
       .with_label_values(&refs)
@@ -275,7 +296,7 @@ impl Metrics {
   pub fn record_scroll_depth(&self, labels: &DimensionLabels, depth: u8) {
     let mut values = self.label_values(labels);
     values.push(scroll_depth_bucket(depth).to_owned());
-    let refs = values.iter().map(String::as_str).collect::<Vec<_>>();
+    let refs = self.bounded_labels(&self.scroll_depth, &values);
     self.scroll_depth.with_label_values(&refs).inc();
   }
 
@@ -286,13 +307,14 @@ impl Metrics {
     key: &str,
     value: &str,
   ) {
-    let event_name = sanitize_label(event_name);
-    let key = sanitize_label(key);
-    let value = sanitize_label(value);
-    self
-      .custom_properties
-      .with_label_values(&[event_name.as_str(), key.as_str(), value.as_str()])
-      .inc();
+    let values = [
+      sanitize_label(event_name),
+      sanitize_label(key),
+      sanitize_label(value),
+    ];
+
+    let refs = self.bounded_labels(&self.custom_properties, &values);
+    self.custom_properties.with_label_values(&refs).inc();
   }
 
   /// Records that a path was dropped because the path registry was full.
@@ -315,15 +337,16 @@ impl Metrics {
   /// Records that a named dimension value was collapsed because its registry
   /// was full.
   pub fn record_dimension_overflow(&self, dimension: &str) {
-    self
-      .dimension_overflow
-      .with_label_values(&[dimension])
-      .inc();
+    let values = [sanitize_label(dimension)];
+    let refs = self.bounded_labels(&self.dimension_overflow, &values);
+    self.dimension_overflow.with_label_values(&refs).inc();
   }
 
   /// Records a blocked embedded-asset request by reason.
   pub fn record_blocked_request(&self, reason: &'static str) {
-    self.blocked_requests.with_label_values(&[reason]).inc();
+    let values = [sanitize_label(reason)];
+    let refs = self.bounded_labels(&self.blocked_requests, &values);
+    self.blocked_requests.with_label_values(&refs).inc();
   }
 
   /// Adds a visitor observation to the unique visitor estimator, if enabled.
@@ -348,6 +371,49 @@ impl Metrics {
     let mut buffer = Vec::new();
     encoder.encode(&self.registry.gather(), &mut buffer)?;
     Ok(String::from_utf8(buffer).unwrap_or_default())
+  }
+
+  fn bounded_labels<'values>(
+    &self,
+    metric: &impl Collector,
+    values: &'values [String],
+  ) -> Vec<&'values str> {
+    const METADATA_AND_OVERFLOW_RESERVE: usize = 64 * 1024;
+    const MAX_ENCODED_F64_LEN: usize = 327;
+
+    let descriptors = metric.desc();
+    let descriptor = descriptors
+      .first()
+      .expect("counter vectors have one descriptor");
+
+    let mut budget = self.series_budget.lock();
+    let SeriesBudget { series, bytes } = &mut *budget;
+    let entries = series.entry(descriptor.fq_name.clone()).or_default();
+
+    if entries.contains(values) {
+      return values.iter().map(String::as_str).collect();
+    }
+
+    let encoded_bytes = descriptor.fq_name.len()
+      + MAX_ENCODED_F64_LEN
+      + 3
+      + descriptor
+        .variable_labels
+        .iter()
+        .zip(values)
+        .map(|(name, value)| name.len() + 4 + 2 * value.len())
+        .sum::<usize>();
+
+    if *bytes + encoded_bytes
+      > MAX_METRICS_RESPONSE_SIZE - METADATA_AND_OVERFLOW_RESERVE
+    {
+      self.series_overflow.inc();
+      return vec!["other"; values.len()];
+    }
+
+    entries.insert(values.to_vec());
+    *bytes += encoded_bytes;
+    values.iter().map(String::as_str).collect()
   }
 
   fn label_values(&self, labels: &DimensionLabels) -> Vec<String> {
