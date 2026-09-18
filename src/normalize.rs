@@ -23,20 +23,17 @@ impl PathNormalizer {
       return "/".to_owned();
     }
 
-    let mut path = input;
-    if self.config.strip_query {
-      path = path.split_once('?').map_or(path, |(path, _)| path);
-    }
-    if self.config.strip_fragment {
-      path = path.split_once('#').map_or(path, |(path, _)| path);
-    }
+    let (path_query, fragment_suffix) = input
+      .split_once('#')
+      .map_or((input, None), |(prefix, suffix)| (prefix, Some(suffix)));
+
+    let (path, query_suffix) = path_query
+      .split_once('?')
+      .map_or((path_query, None), |(prefix, suffix)| {
+        (prefix, Some(suffix))
+      });
 
     let had_trailing_slash = path.ends_with('/') && path != "/";
-    let prefixed;
-    if !path.starts_with('/') {
-      prefixed = format!("/{path}");
-      path = &prefixed;
-    }
 
     let mut segments = Vec::new();
     for segment in path.split('/') {
@@ -62,14 +59,28 @@ impl PathNormalizer {
       segments.truncate(self.config.max_segments);
     }
 
-    if segments.is_empty() {
-      return "/".to_owned();
-    }
-
     let mut normalized = format!("/{}", segments.join("/"));
-    if !self.config.normalize_trailing_slash && had_trailing_slash {
+    if !self.config.normalize_trailing_slash
+      && had_trailing_slash
+      && !segments.is_empty()
+    {
       normalized.push('/');
     }
+
+    if !self.config.strip_query
+      && let Some(query) = query_suffix
+    {
+      normalized.push('?');
+      normalized.push_str(query);
+    }
+
+    if !self.config.strip_fragment
+      && let Some(fragment) = fragment_suffix
+    {
+      normalized.push('#');
+      normalized.push_str(fragment);
+    }
+
     normalized
   }
 }
