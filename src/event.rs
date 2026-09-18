@@ -44,25 +44,25 @@ pub enum EventError {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Event {
   /// Beacon domain (`d`), lowercased during normalization.
-  #[serde(default, rename = "d")]
+  #[serde(default, rename = "d", alias = "domain")]
   domain:       String,
   /// Full page URL (`u`) used for domain and path fallback.
-  #[serde(default, rename = "u")]
+  #[serde(default, rename = "u", alias = "url")]
   url:          String,
   /// Path string or custom property map (`p`).
-  #[serde(default, rename = "p")]
+  #[serde(default, rename = "p", alias = "props")]
   payload:      PayloadField,
   /// Raw referrer string (`r`).
-  #[serde(default, rename = "r")]
+  #[serde(default, rename = "r", alias = "referrer")]
   referrer:     String,
   /// Explicit event name (`n`).
-  #[serde(default, rename = "n")]
+  #[serde(default, rename = "n", alias = "name")]
   name:         String,
   /// Engagement seconds or legacy event name (`e`).
   #[serde(default, rename = "e")]
   engagement:   EngagementOrLegacyEvent,
   /// Viewport width in CSS pixels (`w`).
-  #[serde(default, rename = "w")]
+  #[serde(default, rename = "w", alias = "screen_width")]
   width:        u16,
   /// Scroll depth percentage (`sd`).
   #[serde(default, rename = "sd")]
@@ -321,6 +321,10 @@ impl Event {
       return Err(EventError::DomainNotAllowed);
     }
 
+    self.validate_bounds()
+  }
+
+  fn validate_bounds(&self) -> Result<(), EventError> {
     let path = self.path();
     if path.is_empty() {
       return Err(EventError::MissingPath);
@@ -337,6 +341,14 @@ impl Event {
     if self.width > MAX_WIDTH {
       return Err(EventError::InvalidWidth);
     }
+    self.validate_telemetry()?;
+    if self.scroll_depth > 100 {
+      return Err(EventError::InvalidScrollDepth);
+    }
+    Ok(())
+  }
+
+  fn validate_telemetry(&self) -> Result<(), EventError> {
     #[expect(
       clippy::pattern_type_mismatch,
       reason = "matching borrowed engagement keeps self borrowed, by-value \
@@ -349,10 +361,6 @@ impl Event {
     {
       return Err(EventError::InvalidEngagement);
     }
-    if self.scroll_depth > 100 {
-      return Err(EventError::InvalidScrollDepth);
-    }
-
     Ok(())
   }
 }
@@ -531,5 +539,30 @@ mod tests {
         Err(EventError::InvalidEngagement)
       );
     }
+  }
+
+  #[test]
+  #[expect(
+    clippy::unwrap_used,
+    reason = "test fixtures are static JSON, parse failure means the test is \
+              wrong"
+  )]
+  fn accepts_plausible_wire_format() {
+    let event: Event = serde_json::from_str(
+      r#"{
+        "domain": "example.com",
+        "name": "pageview",
+        "url": "https://example.com/docs",
+        "referrer": "https://news.example/",
+        "screen_width": 1024,
+        "props": {"tier": "paid"}
+      }"#,
+    )
+    .unwrap();
+
+    assert!(event.validate(|domain| domain == "example.com").is_ok());
+    assert_eq!(event.path(), "/docs");
+    assert_eq!(event.event_name(), "pageview");
+    assert_eq!(event.properties().get("tier"), Some(&"paid".to_owned()));
   }
 }
