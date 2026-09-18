@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod config;
+mod counters;
 pub mod event;
 pub mod limits;
 pub mod metrics;
