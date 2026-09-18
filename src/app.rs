@@ -94,9 +94,8 @@ struct AppStateInner {
 }
 
 struct DomainMatcher {
-  exact:       HashSet<String>,
-  suffixes:    Vec<String>,
-  all_allowed: bool,
+  exact:    HashSet<String>,
+  suffixes: Vec<String>,
 }
 
 impl DomainMatcher {
@@ -107,18 +106,11 @@ impl DomainMatcher {
     } else {
       Vec::new()
     };
-    Self {
-      exact,
-      suffixes,
-      all_allowed: domains.iter().any(|domain| domain == "*"),
-    }
+    Self { exact, suffixes }
   }
 
   fn domain_allowed(&self, domain: &str) -> bool {
     if self.exact.contains(domain) {
-      return true;
-    }
-    if self.all_allowed {
       return true;
     }
     self
@@ -1243,6 +1235,9 @@ mod tests {
     assert!(matcher.domain_allowed("blog.example.com"));
     assert!(!matcher.domain_allowed("notexample.com"));
     assert!(!matcher.domain_allowed("example.com.evil.com"));
+
+    let matcher = DomainMatcher::new(&["*".to_owned()], true);
+    assert!(!matcher.domain_allowed("example.com"));
   }
 
   #[test]
