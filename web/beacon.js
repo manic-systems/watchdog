@@ -25,12 +25,13 @@
     engagement: !hasAttr("data-disable-engagement"),
   };
 
-  var tracked = false;
+  var pageview = null;
   var lastPage = null;
   var sessionStarted = false;
-  var engagementStartedAt = document.hidden ? null : Date.now();
+  var engagementStartedAt = null;
   var engagementMs = 0;
   var maxScrollDepth = 0;
+  var reportedScrollDepth = 0;
   var scrollQueued = false;
 
   function lastScriptElement() {
@@ -73,8 +74,6 @@
 
   // Send analytics payload to server
   function sendBeacon(payload) {
-    if (!shouldTrack()) return false;
-
     var data = JSON.stringify(payload);
 
     // Try navigator.sendBeacon first (best for page unload)
@@ -191,7 +190,7 @@
   // Track a pageview
   function trackPageview(opts) {
     opts = opts || {};
-    if (!shouldTrack()) return;
+    var canTrack = shouldTrack();
 
     // Get current page (with hash if hash-mode is enabled)
     var currentPage =
@@ -201,9 +200,19 @@
     }
 
     // Avoid duplicate pageviews
-    if (lastPage === currentPage && !opts.force) {
+    if (canTrack && lastPage === currentPage && !opts.force) {
       return;
     }
+
+    sendEngagement();
+    pageview = null;
+    lastPage = null;
+    engagementStartedAt = null;
+    engagementMs = 0;
+    maxScrollDepth = 0;
+    reportedScrollDepth = 0;
+
+    if (!canTrack) return;
 
     var payload = buildPayload({
       path: currentPage,
@@ -214,7 +223,12 @@
 
     if (sendBeacon(payload)) {
       lastPage = currentPage;
-      tracked = true;
+      pageview = payload;
+
+      if (config.engagement && !document.hidden) {
+        engagementStartedAt = Date.now();
+        updateScrollDepth();
+      }
     }
   }
 
@@ -224,6 +238,8 @@
       console.warn("Watchdog: event name must be a non-empty string");
       return;
     }
+
+    if (!shouldTrack()) return;
 
     opts = opts || {};
     var payload = buildPayload(opts);
@@ -255,6 +271,8 @@
   }
 
   function updateScrollDepth() {
+    if (!pageview || engagementStartedAt === null) return;
+
     var doc = document.documentElement;
     var body = document.body || doc;
     var scrollTop = window.pageYOffset || doc.scrollTop || body.scrollTop || 0;
@@ -277,23 +295,32 @@
   }
 
   function sendEngagement() {
-    if (!tracked || !config.engagement) return;
+    if (!pageview || !config.engagement) return;
 
     updateEngagement();
-    updateScrollDepth();
+    var scrollDepth = maxScrollDepth > reportedScrollDepth ? maxScrollDepth : 0;
 
-    if (engagementMs < 1000 && maxScrollDepth === 0) return;
+    if (engagementMs < 1000 && scrollDepth === 0) return;
 
     var seconds = Math.round(engagementMs / 100) / 10;
     var payload = buildPayload({
+      url: pageview.u,
+      referrer: pageview.r,
       name: "engagement",
       engagementSeconds: seconds,
-      scrollDepth: maxScrollDepth,
+      scrollDepth: scrollDepth,
     });
 
-    engagementMs = 0;
-    maxScrollDepth = 0;
-    sendBeacon(payload);
+    if (sendBeacon(payload)) {
+      engagementMs = 0;
+      reportedScrollDepth = maxScrollDepth;
+    }
+  }
+
+  function pauseEngagement() {
+    updateScrollDepth();
+    sendEngagement();
+    engagementStartedAt = null;
   }
 
   // Track outbound link clicks
@@ -394,12 +421,13 @@
 
     if (config.engagement) {
       window.addEventListener("scroll", scheduleScrollDepth, { passive: true });
-      window.addEventListener("pagehide", sendEngagement);
+      window.addEventListener("pagehide", pauseEngagement);
       document.addEventListener("visibilitychange", function () {
         if (document.hidden) {
-          sendEngagement();
-        } else {
+          pauseEngagement();
+        } else if (pageview) {
           engagementStartedAt = Date.now();
+          updateScrollDepth();
         }
       });
     }
