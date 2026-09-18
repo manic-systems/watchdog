@@ -126,36 +126,40 @@ impl SaltRotation {
             config format"
 )]
 pub struct CollectConfig {
-  pub pageviews:   bool,
-  pub sessions:    bool,
-  pub engagement:  bool,
-  pub country:     bool,
-  pub device:      bool,
-  pub browser:     bool,
-  pub os:          bool,
-  pub screen:      bool,
-  pub referrer:    ReferrerMode,
-  pub acquisition: bool,
-  pub properties:  bool,
-  pub domain:      bool,
+  pub pageviews:          bool,
+  pub sessions:           bool,
+  pub engagement:         bool,
+  pub country:            bool,
+  pub device:             bool,
+  pub browser:            bool,
+  pub os:                 bool,
+  pub screen:             bool,
+  pub referrer:           ReferrerMode,
+  pub acquisition:        bool,
+  pub properties:         bool,
+  pub domain:             bool,
+  pub filter_bots:        bool,
+  pub include_subdomains: bool,
 }
 
 impl Default for CollectConfig {
   #[inline]
   fn default() -> Self {
     Self {
-      pageviews:   true,
-      sessions:    true,
-      engagement:  true,
-      country:     false,
-      device:      true,
-      browser:     false,
-      os:          false,
-      screen:      false,
-      referrer:    ReferrerMode::Domain,
-      acquisition: false,
-      properties:  false,
-      domain:      false,
+      pageviews:          true,
+      sessions:           true,
+      engagement:         true,
+      country:            false,
+      device:             true,
+      browser:            false,
+      os:                 false,
+      screen:             false,
+      referrer:           ReferrerMode::Domain,
+      acquisition:        false,
+      properties:         false,
+      domain:             false,
+      filter_bots:        true,
+      include_subdomains: false,
     }
   }
 }
@@ -378,67 +382,69 @@ impl Config {
   /// Returns an error when required fields are missing or hold invalid values.
   #[inline]
   pub fn validate(&mut self) -> Result<(), ConfigError> {
-    self.site.domains = self
-      .site
-      .domains
+    Self::normalize_domains(&mut self.site.domains)?;
+    Self::normalize_events(&mut self.site.custom_events);
+    self.validate_site()?;
+    self.validate_limits()?;
+    self.validate_security()?;
+    self.validate_server()?;
+    Ok(())
+  }
+
+  fn normalize_domains(domains: &mut Vec<String>) -> Result<(), ConfigError> {
+    *domains = domains
       .iter()
       .map(|domain| domain.trim().trim_end_matches('.').to_ascii_lowercase())
       .filter(|domain| !domain.is_empty())
       .collect();
-
-    if self.site.domains.is_empty() {
+    if domains.is_empty() {
       return Err(ConfigError::MissingDomains);
     }
+    Ok(())
+  }
 
-    self.site.custom_events = self
-      .site
-      .custom_events
+  fn normalize_events(events: &mut Vec<String>) {
+    *events = events
       .iter()
       .map(|event| event.trim().to_owned())
       .filter(|event| !event.is_empty())
       .collect();
+  }
 
+  fn validate_site(&self) -> Result<(), ConfigError> {
     if !(0.0_f64..=1.0_f64).contains(&self.site.sampling) {
       return Err(ConfigError::InvalidSampling);
     }
+    Ok(())
+  }
 
-    if self.limits.max_paths == 0 {
-      return Err(ConfigError::InvalidMaxPaths);
-    }
-
-    if self.limits.max_sources == 0 {
-      return Err(ConfigError::InvalidMaxSources);
-    }
-
-    if self.limits.max_custom_events == 0 {
-      return Err(ConfigError::InvalidMaxCustomEvents);
-    }
-
-    if self.limits.max_dimension_values == 0 {
-      return Err(ConfigError::InvalidMaxDimensionValues);
-    }
-
-    if self.limits.max_property_keys == 0 {
-      return Err(ConfigError::InvalidMaxPropertyKeys);
-    }
-
-    if self.limits.max_property_values == 0 {
-      return Err(ConfigError::InvalidMaxPropertyValues);
-    }
-
-    if self.limits.max_events_per_minute == 0 {
-      return Err(ConfigError::InvalidMaxEventsPerMinute);
-    }
-
-    if self.limits.max_metrics_per_minute == 0 {
-      return Err(ConfigError::InvalidMaxMetricsPerMinute);
-    }
-
-    if self.server.listen_addr.parse::<SocketAddr>().is_err() {
-      return Err(ConfigError::InvalidListenAddr(
-        self.server.listen_addr.clone(),
-      ));
-    }
+  fn validate_limits(&self) -> Result<(), ConfigError> {
+    nonzero(self.limits.max_paths, ConfigError::InvalidMaxPaths)?;
+    nonzero(self.limits.max_sources, ConfigError::InvalidMaxSources)?;
+    nonzero(
+      self.limits.max_custom_events,
+      ConfigError::InvalidMaxCustomEvents,
+    )?;
+    nonzero(
+      self.limits.max_dimension_values,
+      ConfigError::InvalidMaxDimensionValues,
+    )?;
+    nonzero(
+      self.limits.max_property_keys,
+      ConfigError::InvalidMaxPropertyKeys,
+    )?;
+    nonzero(
+      self.limits.max_property_values,
+      ConfigError::InvalidMaxPropertyValues,
+    )?;
+    nonzero(
+      self.limits.max_events_per_minute,
+      ConfigError::InvalidMaxEventsPerMinute,
+    )?;
+    nonzero(
+      self.limits.max_metrics_per_minute,
+      ConfigError::InvalidMaxMetricsPerMinute,
+    )?;
 
     if self.limits.device_breakpoints.mobile == 0
       || self.limits.device_breakpoints.tablet == 0
@@ -447,7 +453,10 @@ impl Config {
     {
       return Err(ConfigError::InvalidDeviceBreakpoints);
     }
+    Ok(())
+  }
 
+  fn validate_security(&self) -> Result<(), ConfigError> {
     if self.security.metrics_auth.enabled
       && (self.security.metrics_auth.username.is_empty()
         || self.security.metrics_auth.password.is_empty())
@@ -467,6 +476,15 @@ impl Config {
       }
       return Err(ConfigError::InvalidTrustedProxy(proxy.clone()));
     }
+    Ok(())
+  }
+
+  fn validate_server(&self) -> Result<(), ConfigError> {
+    if self.server.listen_addr.parse::<SocketAddr>().is_err() {
+      return Err(ConfigError::InvalidListenAddr(
+        self.server.listen_addr.clone(),
+      ));
+    }
 
     validate_endpoint_path("metrics_path", &self.server.metrics_path)?;
     validate_endpoint_path("ingestion_path", &self.server.ingestion_path)?;
@@ -478,7 +496,17 @@ impl Config {
       "ingestion_path",
       &self.server.ingestion_path,
     )?;
+    Ok(())
+  }
+}
 
+fn nonzero<T>(value: T, error: ConfigError) -> Result<(), ConfigError>
+where
+  T: PartialEq + Default + Copy,
+{
+  if value == T::default() {
+    Err(error)
+  } else {
     Ok(())
   }
 }
