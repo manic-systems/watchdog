@@ -7,6 +7,7 @@ on:
       - '**.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'deny.toml'
       - '.rustfmt.toml'
       - '.taplo.toml'
       - '.github/workflows/rust.yml'
@@ -21,6 +22,7 @@ on:
       - '**.rs'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'deny.toml'
       - '.rustfmt.toml'
       - '.taplo.toml'
       - '.github/workflows/rust.yml'
@@ -54,6 +56,12 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Check dependencies
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          arguments: --locked check
+          deny-file: deny.toml
 
       - name: Build
         run: cargo build --locked --release

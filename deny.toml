@@ -1,0 +1,44 @@
+[graph]
+targets = [ "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu" ]
+
+[advisories]
+db-urls = [ "https://github.com/rustsec/advisory-db" ]
+ignore = [
+  # RUSTSEC-2025-0141: bincode 1.x is unmaintained by upstream decision.
+  # Pulled in via probabilistic-collections; the team seems to consider
+  # 1.3.3 complete.
+  # XXX: Revisit if the crate is replaced upstream.
+  "RUSTSEC-2025-0141",
+]
+yanked = "warn"
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "BSL-1.0",
+  "EUPL-1.2",
+  "MIT",
+  "Unicode-3.0",
+  "Unlicense",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = true
+[bans]
+highlight = "all"
+multiple-versions = "warn"
+skip-tree = [
+  # figment 0.10 pins toml 0.8, duplicating the direct toml 1.x dependency.
+  # Unavoidable until figment upgrades; both trees are pinned in Cargo.lock.
+  "figment@0.10.19",
+]
+wildcards = "deny"
+
+[sources]
+allow-registry   = [ "https://github.com/rust-lang/crates.io-index" ]
+unknown-git      = "deny"
+unknown-registry = "deny"

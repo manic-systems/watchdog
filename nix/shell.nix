@@ -8,6 +8,7 @@
   clippy,
   cargo-audit,
   cargo-nextest,
+  cargo-deny,
 }:
 mkShell {
   name = "watchdog";
@@ -24,5 +25,6 @@ mkShell {
     # Additional Cargo Tooling
     cargo-audit
     cargo-nextest
+    cargo-deny
   ];
 }
