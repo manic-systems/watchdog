@@ -141,6 +141,15 @@ collecting metrics:
 <script src="https://analytics.example.com/web/beacon.js" defer></script>
 ```
 
+The default API endpoint uses the beacon script's origin. For a separate
+analytics host, enable CORS on the server for your site's origin.
+
+```toml
+[security.cors]
+enabled = true
+allowed_origins = ["https://example.com"]
+```
+
 The script beacon also supports a _variety_ of configuration options via data
 attributes, which you might adjust to your own needs. Some of them are described
 below:
