@@ -2,6 +2,7 @@ use std::path::Path;
 
 use parking_lot::Mutex;
 use probabilistic_collections::hyperloglog::HyperLogLog;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -126,9 +127,16 @@ impl UniquesEstimator {
         .map_err(UniqueStateError::Write)?;
     }
 
-    tokio::fs::write(path, data)
-      .await
-      .map_err(UniqueStateError::Write)
+    let temp_path = tmp_path(path);
+    if let Err(err) = tokio::fs::write(&temp_path, &data).await {
+      let _ = tokio::fs::remove_file(&temp_path).await;
+      return Err(UniqueStateError::Write(err));
+    }
+    if let Err(err) = tokio::fs::rename(&temp_path, path).await {
+      let _ = tokio::fs::remove_file(&temp_path).await;
+      return Err(UniqueStateError::Write(err));
+    }
+    Ok(())
   }
 
   /// Returns the active salt for tests that verify state restoration.
@@ -142,6 +150,12 @@ fn parent_dir(path: &Path) -> Option<&Path> {
   path
     .parent()
     .filter(|parent| !parent.as_os_str().is_empty())
+}
+
+fn tmp_path(path: &Path) -> std::path::PathBuf {
+  let mut name = path.as_os_str().to_owned();
+  name.push(".tmp");
+  std::path::PathBuf::from(name)
 }
 
 fn salt_key(now: OffsetDateTime, rotation: SaltRotation) -> String {
@@ -167,15 +181,18 @@ fn salt_key(now: OffsetDateTime, rotation: SaltRotation) -> String {
 }
 
 fn generate_salt(key: &str) -> String {
-  let digest = Sha256::digest(format!("watchdog-salt-{key}").as_bytes());
-  hex::encode(digest)
+  let mut bytes = [0u8; 32];
+  rand::rng().fill_bytes(&mut bytes);
+  let mut hasher = Sha256::new();
+  hasher.update(key.as_bytes());
+  hasher.update(bytes);
+  hex::encode(hasher.finalize())
 }
 
 fn hash_visitor(ip: &str, user_agent: &str, salt: &str) -> String {
   let digest = Sha256::digest(format!("{ip}|{user_agent}|{salt}").as_bytes());
   hex::encode(digest)
 }
-
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -213,5 +230,22 @@ mod tests {
 
     assert!(restored.estimate() >= 1.0);
     assert_eq!(restored.current_salt(), estimator.current_salt());
+  }
+
+  #[test]
+  fn generates_unique_salts_per_period() {
+    assert_ne!(generate_salt("2026-09-18"), generate_salt("2026-09-18"));
+  }
+
+  #[tokio::test]
+  async fn saves_without_leaving_temp_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hll.state");
+    let estimator = UniquesEstimator::new(SaltRotation::Daily);
+
+    estimator.save(&path).await.unwrap();
+
+    assert!(path.exists());
+    assert!(!tmp_path(&path).exists());
   }
 }
