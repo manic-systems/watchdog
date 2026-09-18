@@ -7,10 +7,10 @@ pub mod event;
 pub mod limits;
 pub mod metrics;
 pub mod normalize;
+pub mod ratelimit;
 pub mod registry;
 pub mod server;
 pub mod uniques;
-
 /// Build metadata exposed through metrics and logs.
 #[derive(Debug, Clone)]
 pub struct BuildInfo {
