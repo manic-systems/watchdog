@@ -1,7 +1,7 @@
 use std::path::Path;
 
+use cardinality_estimator_safe::{Element, Sketch};
 use parking_lot::Mutex;
-use probabilistic_collections::hyperloglog::HyperLogLog;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -9,6 +9,8 @@ use thiserror::Error;
 use time::OffsetDateTime;
 
 use crate::config::SaltRotation;
+
+type VisitorSketch = Sketch<14, 6>;
 
 /// Errors returned while loading or saving unique visitor estimator state.
 #[derive(Debug, Error)]
@@ -33,20 +35,20 @@ pub struct UniquesEstimator {
 struct PersistedUniques {
   salt_key: String,
   salt:     String,
-  hll:      HyperLogLog<String>,
+  hll:      VisitorSketch,
 }
 
 #[derive(Serialize)]
 struct PersistedUniquesRef<'a> {
   salt_key: &'a str,
   salt:     &'a str,
-  hll:      &'a HyperLogLog<String>,
+  hll:      &'a VisitorSketch,
 }
 
 struct UniquesInner {
   salt_key: String,
   salt:     String,
-  hll:      HyperLogLog<String>,
+  hll:      VisitorSketch,
 }
 
 impl UniquesEstimator {
@@ -58,7 +60,7 @@ impl UniquesEstimator {
       inner: Mutex::new(UniquesInner {
         salt: generate_salt(&salt_key),
         salt_key,
-        hll: HyperLogLog::new(0.01),
+        hll: VisitorSketch::default(),
       }),
     }
   }
@@ -71,16 +73,16 @@ impl UniquesEstimator {
     if current_key != inner.salt_key {
       inner.salt_key = current_key;
       inner.salt = generate_salt(&inner.salt_key);
-      inner.hll = HyperLogLog::new(0.01);
+      inner.hll = VisitorSketch::default();
     }
 
     let visitor_hash = hash_visitor(ip, user_agent, &inner.salt);
-    inner.hll.insert(&visitor_hash);
+    inner.hll.insert(Element::from_hashed(visitor_hash));
   }
 
   /// Returns the current estimated unique visitor count.
   pub fn estimate(&self) -> f64 {
-    self.inner.lock().hll.len()
+    self.inner.lock().hll.estimate() as f64
   }
 
   /// Loads persisted state when it belongs to the current rotation period.
@@ -103,7 +105,7 @@ impl UniquesEstimator {
     } else {
       inner.salt_key = current_key;
       inner.salt = generate_salt(&inner.salt_key);
-      inner.hll = HyperLogLog::new(0.01);
+      inner.hll = VisitorSketch::default();
     }
 
     Ok(())
@@ -189,9 +191,12 @@ fn generate_salt(key: &str) -> String {
   hex::encode(hasher.finalize())
 }
 
-fn hash_visitor(ip: &str, user_agent: &str, salt: &str) -> String {
+fn hash_visitor(ip: &str, user_agent: &str, salt: &str) -> u64 {
   let digest = Sha256::digest(format!("{ip}|{user_agent}|{salt}").as_bytes());
-  hex::encode(digest)
+  let bytes = digest[..8]
+    .try_into()
+    .expect("SHA-256 has at least eight bytes");
+  u64::from_le_bytes(bytes)
 }
 #[cfg(test)]
 mod tests {

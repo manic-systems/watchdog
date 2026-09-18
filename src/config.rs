@@ -86,7 +86,7 @@ impl Default for SiteConfig {
   fn default() -> Self {
     Self {
       domains:       Vec::new(),
-      salt_rotation: Some(SaltRotation::Daily),
+      salt_rotation: None,
       sampling:      1.0,
       collect:       CollectConfig::default(),
       custom_events: Vec::new(),
