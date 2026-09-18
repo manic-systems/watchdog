@@ -132,6 +132,7 @@ pub fn extract_referrer_url(
   if url.set_password(None).is_err() {
     return None;
   }
+  url.set_query(None);
   url.set_fragment(None);
   Some(url.to_string())
 }
@@ -277,6 +278,17 @@ mod tests {
     assert_eq!(
       extract_referrer_domain("https://localhost.evil.com/test", "example.com"),
       Some("evil.com".to_owned())
+    );
+  }
+
+  #[test]
+  fn strips_query_from_referrer_urls() {
+    assert_eq!(
+      extract_referrer_url(
+        "https://news.example/article?utm_source=x&token=secret#top",
+        "example.com"
+      ),
+      Some("https://news.example/article".to_owned())
     );
   }
 }
