@@ -128,7 +128,7 @@ impl UniquesEstimator {
   }
 
   /// Returns a serialized snapshot without holding the lock across I/O.
-  pub fn snapshot(&self) -> Result<Vec<u8>, UniqueStateError> {
+  fn snapshot(&self) -> Result<Vec<u8>, UniqueStateError> {
     self.rotate_if_needed();
     let inner = self.inner.lock();
     let persisted = PersistedUniquesRef {

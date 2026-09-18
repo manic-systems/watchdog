@@ -1,7 +1,4 @@
-use std::{
-  collections::HashSet,
-  sync::atomic::{AtomicUsize, Ordering},
-};
+use std::collections::HashSet;
 
 use parking_lot::RwLock;
 
@@ -12,8 +9,6 @@ pub struct BoundedRegistry {
   entries:     RwLock<HashSet<String>>,
   /// Maximum number of distinct values kept.
   max_entries: usize,
-  /// Count of values rejected after the registry filled.
-  overflows:   AtomicUsize,
 }
 
 impl BoundedRegistry {
@@ -24,7 +19,6 @@ impl BoundedRegistry {
     Self {
       entries: RwLock::new(HashSet::with_capacity(max_entries)),
       max_entries,
-      overflows: AtomicUsize::new(0),
     }
   }
 
@@ -41,7 +35,6 @@ impl BoundedRegistry {
     }
 
     if entries.len() >= self.max_entries {
-      self.overflows.fetch_add(1, Ordering::Relaxed);
       return false;
     }
 
@@ -55,14 +48,7 @@ impl BoundedRegistry {
     self.entries.read().len()
   }
 
-  /// Returns how many distinct values were rejected after the registry filled.
-  #[inline]
-  pub fn overflow_count(&self) -> usize {
-    self.overflows.load(Ordering::Relaxed)
-  }
-
   /// Returns whether a value has already been accepted by the registry.
-  #[inline]
   pub fn contains(&self, value: &str) -> bool {
     self.entries.read().contains(value)
   }
@@ -80,6 +66,5 @@ mod tests {
     assert!(registry.add("/a"));
     assert!(!registry.add("/b"));
     assert_eq!(registry.count(), 1);
-    assert_eq!(registry.overflow_count(), 1);
   }
 }
