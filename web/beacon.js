@@ -163,7 +163,7 @@
     }
   }
 
-  function sessionMarker() {
+  function isNewSession() {
     if (sessionStarted) return false;
 
     var key = "watchdog:session:" + config.domain;
@@ -172,12 +172,10 @@
         sessionStarted = true;
         return false;
       }
-      window.sessionStorage.setItem(key, "1");
     } catch (e) {
       // Fall back to an in-memory marker when sessionStorage is unavailable.
     }
 
-    sessionStarted = true;
     return true;
   }
 
@@ -267,10 +265,20 @@
       url: currentUrl,
       name: "pageview",
       referrer: opts.referrer,
-      session: sessionMarker(),
+      session: isNewSession(),
     });
 
     if (sendBeacon(payload)) {
+      if (payload.s) {
+        sessionStarted = true;
+        try {
+          window.sessionStorage.setItem(
+            "watchdog:session:" + config.domain,
+            "1",
+          );
+        } catch (e) {}
+      }
+
       lastPage = currentPage;
       pageview = payload;
 
