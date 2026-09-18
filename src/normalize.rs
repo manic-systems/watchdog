@@ -1,7 +1,7 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use addr::parse_domain_name;
-use url::Url;
+use url::{Host, Url};
 
 use crate::{config::PathConfig, limits::MAX_PATH_LEN};
 
@@ -149,7 +149,15 @@ fn normalized_referrer_host(
     return None;
   }
 
-  if is_internal_host(&hostname) {
+  let internal = match url.host()? {
+    Host::Domain(_) => {
+      hostname == "localhost" || hostname.ends_with(".localhost")
+    },
+    Host::Ipv4(address) => is_internal_ipv4(address),
+    Host::Ipv6(address) => is_internal_ipv6(address),
+  };
+
+  if internal {
     return Some(ReferrerHost {
       hostname,
       classification: ReferrerHostClassification::Internal,
@@ -170,24 +178,15 @@ fn normalized_referrer_host(
   })
 }
 
-fn is_internal_host(hostname: &str) -> bool {
-  if hostname == "localhost" || hostname.ends_with(".localhost") {
-    return true;
-  }
-
-  match hostname.parse::<IpAddr>() {
-    Ok(IpAddr::V4(ip)) => is_internal_ipv4(ip),
-    Ok(IpAddr::V6(ip)) => is_internal_ipv6(ip),
-    Err(_) => false,
-  }
-}
-
 fn is_internal_ipv4(ip: Ipv4Addr) -> bool {
   ip.is_private() || ip.is_loopback() || ip.is_link_local()
 }
 
 fn is_internal_ipv6(ip: Ipv6Addr) -> bool {
-  ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
+  ip.is_loopback()
+    || ip.is_unique_local()
+    || ip.is_unicast_link_local()
+    || ip.to_ipv4_mapped().is_some_and(is_internal_ipv4)
 }
 
 #[cfg(test)]
