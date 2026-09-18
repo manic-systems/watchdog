@@ -134,6 +134,12 @@ mobile = 768
 tablet = 1024
 ```
 
+Complete label combinations also share a byte budget below the 10 MiB scrape
+limit. The budget accounts for escaped labels and counter growth. Once it fills,
+new combinations use `other` for every label and increment
+`web_series_overflow_total`. Existing combinations keep their labels, and
+aggregate totals are preserved.
+
 ### Security
 
 ```toml
