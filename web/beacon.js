@@ -398,7 +398,6 @@
 
     // Track as custom event
     trackEvent("Outbound Link: Click", {
-      path: window.location.pathname,
       props: { url: url.href },
     });
   }
@@ -444,7 +443,6 @@
 
     // Track as custom event
     trackEvent("File Download", {
-      path: window.location.pathname,
       props: { url: url.href },
     });
   }
