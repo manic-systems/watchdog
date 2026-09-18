@@ -1580,6 +1580,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-io-timeout"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bd86198d9ee903fedd2f9a2e72014287c0d9167e4ae43b5853007205dda1b76"
+dependencies = [
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-macros"
 version = "2.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1712,6 +1722,7 @@ dependencies = [
  "http-body",
  "percent-encoding",
  "pin-project-lite",
+ "tokio",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -1996,6 +2007,8 @@ dependencies = [
  "clap",
  "figment",
  "hex",
+ "hyper",
+ "hyper-util",
  "ipnet",
  "mime_guess",
  "parking_lot",
@@ -2011,6 +2024,7 @@ dependencies = [
  "thiserror 2.0.20",
  "time",
  "tokio",
+ "tokio-io-timeout",
  "tokio-util",
  "toml 1.1.6+spec-1.1.0",
  "tower-http",

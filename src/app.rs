@@ -24,6 +24,7 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tower_http::{
   cors::{Any, CorsLayer},
+  timeout::TimeoutLayer,
   trace::TraceLayer,
 };
 use url::{Url, form_urlencoded};
@@ -33,7 +34,7 @@ use crate::{
   BuildInfo,
   config::{Config, CorsConfig, ReferrerMode},
   event::Event,
-  limits::{MAX_EVENT_SIZE, MAX_METRICS_RESPONSE_SIZE},
+  limits::{HTTP_READ_TIMEOUT, MAX_EVENT_SIZE, MAX_METRICS_RESPONSE_SIZE},
   metrics::{DimensionLabels, Metrics, sanitize_label},
   normalize::{PathNormalizer, extract_referrer_domain, extract_referrer_url},
   ratelimit::IpRateLimiter,
@@ -216,6 +217,10 @@ pub fn router(state: AppState) -> Result<Router, AppError> {
       .route(&metrics_path, metrics_route)
       .route("/health", get(health))
       .route("/web/{*path}", get(static_asset))
+      .layer(TimeoutLayer::with_status_code(
+        StatusCode::REQUEST_TIMEOUT,
+        HTTP_READ_TIMEOUT,
+      ))
       .layer(TraceLayer::new_for_http())
       .with_state(state),
   )

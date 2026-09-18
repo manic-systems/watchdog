@@ -14,9 +14,15 @@ use parking_lot::Mutex;
 /// protection is intentionally left to edge proxies.
 #[derive(Debug, Clone)]
 pub struct IpRateLimiter {
-  inner:  Arc<Mutex<HashMap<IpAddr, Window>>>,
+  inner:  Arc<Mutex<IpWindows>>,
   limit:  NonZeroU32,
   window: Duration,
+}
+
+#[derive(Debug)]
+struct IpWindows {
+  entries:      HashMap<IpAddr, Window>,
+  next_cleanup: Instant,
 }
 
 #[derive(Debug)]
@@ -36,7 +42,10 @@ impl IpRateLimiter {
 
   fn with_window(limit: NonZeroU32, window: Duration) -> Self {
     Self {
-      inner: Arc::new(Mutex::new(HashMap::new())),
+      inner: Arc::new(Mutex::new(IpWindows {
+        entries:      HashMap::new(),
+        next_cleanup: Instant::now(),
+      })),
       limit,
       window,
     }
@@ -45,28 +54,38 @@ impl IpRateLimiter {
   /// Returns true when a request from `ip` fits its current window.
   pub fn check(&self, ip: IpAddr) -> bool {
     let mut inner = self.inner.lock();
-    if inner.len() > MAX_TRACKED_IPS {
-      let window = self.window;
-      inner.retain(|_, entry| entry.start.elapsed() < window);
+    let now = Instant::now();
+
+    if let Some(entry) = inner.entries.get_mut(&ip) {
+      if now.duration_since(entry.start) >= self.window {
+        entry.count = 0;
+        entry.start = now;
+      }
+
+      if entry.count >= self.limit.get() {
+        return false;
+      }
+
+      entry.count += 1;
+      return true;
     }
 
-    match inner.get_mut(&ip) {
-      Some(entry) if entry.start.elapsed() < self.window => {
-        if entry.count < self.limit.get() {
-          entry.count += 1;
-          true
-        } else {
-          false
-        }
-      },
-      _ => {
-        inner.insert(ip, Window {
-          count: 1,
-          start: Instant::now(),
-        });
-        true
-      },
+    if inner.entries.len() >= MAX_TRACKED_IPS && now >= inner.next_cleanup {
+      inner
+        .entries
+        .retain(|_, entry| now.duration_since(entry.start) < self.window);
+      inner.next_cleanup = now + Duration::from_secs(1);
     }
+
+    if inner.entries.len() >= MAX_TRACKED_IPS {
+      return false;
+    }
+
+    inner.entries.insert(ip, Window {
+      count: 1,
+      start: now,
+    });
+    true
   }
 }
 
@@ -125,7 +144,7 @@ mod tests {
           (index >> 8) as u8,
           index as u8,
         ]);
-        inner.insert(addr, Window {
+        inner.entries.insert(addr, Window {
           count: 1,
           start: stale,
         });
@@ -134,6 +153,6 @@ mod tests {
 
     let fresh: IpAddr = "192.0.2.1".parse().unwrap();
     assert!(limiter.check(fresh));
-    assert!(limiter.inner.lock().len() < MAX_TRACKED_IPS);
+    assert!(limiter.inner.lock().entries.len() < MAX_TRACKED_IPS);
   }
 }

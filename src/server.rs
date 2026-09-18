@@ -1,15 +1,30 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use tokio::{net::TcpListener, task::JoinHandle};
+use axum::{Extension, Router, extract::ConnectInfo, serve::Listener};
+use hyper::server::conn::http1::Builder;
+use hyper_util::{
+  rt::{TokioIo, TokioTimer},
+  service::TowerToHyperService,
+};
+use tokio::{
+  net::{TcpListener, TcpStream},
+  task::{JoinHandle, JoinSet},
+};
+use tokio_io_timeout::TimeoutStream;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
   BuildInfo,
   app::{self, AppState},
   config::Config,
-  limits::{SHUTDOWN_TIMEOUT, UNIQUES_UPDATE_PERIOD},
+  limits::{
+    HTTP_READ_TIMEOUT,
+    HTTP_WRITE_TIMEOUT,
+    SHUTDOWN_TIMEOUT,
+    UNIQUES_UPDATE_PERIOD,
+  },
 };
 
 /// Runs the HTTP server until a shutdown signal is received.
@@ -29,34 +44,94 @@ pub async fn run(config: Config, build_info: BuildInfo) -> anyhow::Result<()> {
     .listen_addr
     .parse()
     .context("server.listen_addr must be a socket address")?;
-  let listener = TcpListener::bind(listen_addr)
+  let mut listener = TcpListener::bind(listen_addr)
     .await
     .with_context(|| format!("failed to bind {listen_addr}"))?;
   let shutdown = CancellationToken::new();
-  let uniques_task =
+  let mut uniques_task =
     spawn_unique_gauge_updater(state.clone(), shutdown.child_token());
+  let mut connections = JoinSet::new();
+  let exit_signal = shutdown_signal(shutdown.clone());
+  tokio::pin!(exit_signal);
 
   info!(addr = %listen_addr, metrics = %state.config().server.metrics_path, ingestion = %state.config().server.ingestion_path, "starting server");
 
-  axum::serve(
-    listener,
-    app.into_make_service_with_connect_info::<SocketAddr>(),
-  )
-  .with_graceful_shutdown(shutdown_signal(shutdown.clone()))
-  .await
-  .context("server error")?;
+  loop {
+    tokio::select! {
+      _ = &mut exit_signal => break,
+      (stream, remote_addr) = Listener::accept(&mut listener) => {
+        connections.spawn(serve_connection(stream, remote_addr, app.clone(), shutdown.clone()));
+      }
+      Some(result) = connections.join_next(), if !connections.is_empty() => {
+        if let Err(err) = result {
+          warn!(error = %err, "HTTP connection task failed");
+        }
+      }
+    }
+  }
 
+  drop(listener);
   shutdown.cancel();
-  if let Err(err) = tokio::time::timeout(SHUTDOWN_TIMEOUT, uniques_task).await {
-    warn!(error = %err, "unique visitor gauge task did not stop before timeout");
+
+  let drain = async {
+    while let Some(result) = connections.join_next().await {
+      if let Err(err) = result {
+        warn!(error = %err, "HTTP connection task failed");
+      }
+    }
+  };
+
+  if tokio::time::timeout(SHUTDOWN_TIMEOUT, drain).await.is_err() {
+    warn!("HTTP connections did not stop before timeout");
+    connections.shutdown().await;
   }
 
-  if let Err(err) = state.save_state().await {
-    error!(error = %err, "failed to persist unique visitor state");
+  match tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut uniques_task).await {
+    Ok(Ok(())) => {},
+    Ok(Err(err)) => warn!(error = %err, "unique visitor gauge task failed"),
+    Err(err) => {
+      uniques_task.abort();
+      warn!(error = %err, "unique visitor gauge task did not stop before timeout");
+    },
   }
+
+  state
+    .save_state()
+    .await
+    .context("failed to persist unique visitor state")?;
 
   info!("graceful shutdown complete");
   Ok(())
+}
+
+async fn serve_connection(
+  stream: TcpStream,
+  remote_addr: SocketAddr,
+  app: Router,
+  shutdown: CancellationToken,
+) {
+  let mut timed_stream = TimeoutStream::new(stream);
+  timed_stream.set_read_timeout(Some(HTTP_READ_TIMEOUT));
+  timed_stream.set_write_timeout(Some(HTTP_WRITE_TIMEOUT));
+  let service =
+    TowerToHyperService::new(app.layer(Extension(ConnectInfo(remote_addr))));
+  let connection = Builder::new()
+    .timer(TokioTimer::new())
+    .header_read_timeout(HTTP_READ_TIMEOUT)
+    .serve_connection(TokioIo::new(Box::pin(timed_stream)), service);
+  tokio::pin!(connection);
+
+  let result = tokio::select! {
+    result = &mut connection => result,
+    _ = shutdown.cancelled() => {
+      connection.as_mut().graceful_shutdown();
+      connection.await
+    }
+  };
+
+  if let Err(err) = result {
+    debug!(error = %err, "HTTP connection failed");
+  }
 }
 
 fn spawn_unique_gauge_updater(
