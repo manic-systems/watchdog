@@ -18,7 +18,6 @@ use axum::{
   routing::{get, post},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use governor::{DefaultDirectRateLimiter, Quota, RateLimiter};
 use ipnet::IpNet;
 use rust_embed::RustEmbed;
 use subtle::ConstantTimeEq;
@@ -37,9 +36,9 @@ use crate::{
   limits::{MAX_EVENT_SIZE, MAX_METRICS_RESPONSE_SIZE},
   metrics::{DimensionLabels, Metrics, sanitize_label},
   normalize::{PathNormalizer, extract_referrer_domain, extract_referrer_url},
+  ratelimit::IpRateLimiter,
   registry::BoundedRegistry,
 };
-
 #[derive(RustEmbed)]
 #[folder = "web"]
 struct WebAssets;
@@ -69,8 +68,8 @@ struct AppStateInner {
   allowed_domains:         HashSet<String>,
   allowed_events:          HashSet<String>,
   trusted_proxies:         Vec<IpNet>,
-  ingestion_limiter:       Option<Arc<DefaultDirectRateLimiter>>,
-  metrics_limiter:         Option<Arc<DefaultDirectRateLimiter>>,
+  ingestion_limiter:       Option<Arc<IpRateLimiter>>,
+  metrics_limiter:         Option<Arc<IpRateLimiter>>,
   path_normalizer:         PathNormalizer,
   path_registry:           BoundedRegistry,
   referrer_registry:       BoundedRegistry,
@@ -233,9 +232,11 @@ async fn ingest(
   Json(event): Json<Event>,
 ) -> Response {
   let request_id = request_id(&headers);
+  let remote_ip = remote_addr.ip();
+  let client_ip = state.client_ip(&headers, remote_ip);
 
   if let Some(limiter) = &state.inner.ingestion_limiter
-    && limiter.check().is_err()
+    && !limiter.check(client_ip)
   {
     return response_with_request_id(StatusCode::TOO_MANY_REQUESTS, request_id);
   }
@@ -255,14 +256,8 @@ async fn ingest(
   }
 
   let event_path = event.path();
-  let normalized_path = state.inner.path_normalizer.normalize(&event_path);
-  if !state.inner.path_registry.add(&normalized_path) {
-    state.inner.metrics.record_path_overflow();
-    return response_with_request_id(StatusCode::NO_CONTENT, request_id);
-  }
+  let normalized_path = admit_path(&state, &event_path);
 
-  let remote_ip = remote_addr.ip();
-  let client_ip = state.client_ip(&headers, remote_ip);
   let user_agent = headers
     .get(header::USER_AGENT)
     .and_then(|value| value.to_str().ok())
@@ -308,6 +303,15 @@ async fn ingest(
   );
 
   response_with_request_id(StatusCode::NO_CONTENT, request_id)
+}
+
+fn admit_path(state: &AppState, event_path: &str) -> String {
+  let normalized = state.inner.path_normalizer.normalize(event_path);
+  if state.inner.path_registry.add(&normalized) {
+    return normalized;
+  }
+  state.inner.metrics.record_path_overflow();
+  "other".to_owned()
 }
 
 fn record_pageview(state: &AppState, labels: &DimensionLabels) {
@@ -642,16 +646,19 @@ fn is_system_event(event_name: &str) -> bool {
 
 async fn metrics(
   State(state): State<AppState>,
+  ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
   headers: HeaderMap,
 ) -> Response {
-  if !metrics_authorized(&state, &headers) {
-    return unauthorized_metrics_response();
-  }
-
+  let remote_ip = remote_addr.ip();
+  let client_ip = state.client_ip(&headers, remote_ip);
   if let Some(limiter) = &state.inner.metrics_limiter
-    && limiter.check().is_err()
+    && !limiter.check(client_ip)
   {
     return StatusCode::TOO_MANY_REQUESTS.into_response();
+  }
+
+  if !metrics_authorized(&state, &headers) {
+    return unauthorized_metrics_response();
   }
 
   match state.inner.metrics.encode() {
@@ -687,8 +694,21 @@ fn metrics_authorized(state: &AppState, headers: &HeaderMap) -> bool {
     return false;
   };
 
-  username.as_bytes().ct_eq(auth.username.as_bytes()).into()
-    && password.as_bytes().ct_eq(auth.password.as_bytes()).into()
+  let expected = format!("{}:{}", auth.username, auth.password);
+  let provided = format!("{username}:{password}");
+  constant_time_equal(expected.as_bytes(), provided.as_bytes())
+}
+
+fn constant_time_equal(expected: &[u8], provided: &[u8]) -> bool {
+  let mismatch = expected.len().ct_eq(&provided.len());
+  let max_len = expected.len().max(provided.len());
+  let mut diff = 0u8;
+  for index in 0..max_len {
+    let left = expected.get(index).copied().unwrap_or(0);
+    let right = provided.get(index).copied().unwrap_or(0);
+    diff |= left ^ right;
+  }
+  bool::from(mismatch & diff.ct_eq(&0))
 }
 
 fn unauthorized_metrics_response() -> Response {
@@ -875,9 +895,8 @@ fn cors_layer(config: &CorsConfig) -> Result<CorsLayer, AppError> {
   }
 }
 
-fn rate_limiter(limit: u32) -> Option<Arc<DefaultDirectRateLimiter>> {
-  NonZeroU32::new(limit)
-    .map(|limit| Arc::new(RateLimiter::direct(Quota::per_minute(limit))))
+fn rate_limiter(limit: u32) -> Option<Arc<IpRateLimiter>> {
+  NonZeroU32::new(limit).map(|limit| Arc::new(IpRateLimiter::per_minute(limit)))
 }
 
 fn parse_trusted_proxies(values: &[String]) -> Result<Vec<IpNet>, AppError> {
@@ -1001,5 +1020,28 @@ mod tests {
     assert_eq!(validate_asset_path(".env"), Err("dotfile"));
     assert_eq!(validate_asset_path("config.js"), Err("sensitive_file"));
     assert_eq!(validate_asset_path("image.png"), Err("invalid_extension"));
+  }
+
+  #[test]
+  fn collapses_path_to_other_when_registry_full() {
+    let mut config = Config::default();
+    config.site.domains = vec!["example.com".to_owned()];
+    config.limits.max_paths = 1;
+    config.validate().unwrap();
+    let state = AppState::new(config, BuildInfo::current()).unwrap();
+
+    assert_eq!(admit_path(&state, "/first"), "/first");
+    assert_eq!(admit_path(&state, "/second"), "other");
+  }
+
+  #[test]
+  fn compares_metrics_credentials_in_constant_time() {
+    assert!(constant_time_equal(b"admin:secret", b"admin:secret"));
+    assert!(!constant_time_equal(b"admin:secret", b"admin:wrong"));
+    assert!(!constant_time_equal(
+      b"admin:secret",
+      b"admin:longer-secret"
+    ));
+    assert!(!constant_time_equal(b"admin:secret", b"user:secret"));
   }
 }
