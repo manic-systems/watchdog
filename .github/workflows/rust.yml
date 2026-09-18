@@ -13,7 +13,6 @@ on:
       - '.github/workflows/rust.yml'
       - 'config.example.toml'
       - 'docs/**'
-      - 'testdata/**'
       - 'web/**'
 
   pull_request:
@@ -28,7 +27,6 @@ on:
       - '.github/workflows/rust.yml'
       - 'config.example.toml'
       - 'docs/**'
-      - 'testdata/**'
       - 'web/**'
 
 jobs:
