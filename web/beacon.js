@@ -61,19 +61,30 @@
     : [];
 
   // Check if page should be tracked
-  function shouldTrack() {
+  function shouldTrack(url) {
     // Skip localhost unless explicitly allowed
     if (
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1"
+      (window.location.hostname === "localhost" ||
+        window.location.hostname === "127.0.0.1") &&
+      !config.allowLocalhost
     ) {
-      return config.allowLocalhost;
+      return false;
     }
 
     // Check exclusions
     var path = window.location.pathname;
+    var reportedPath;
+    try {
+      reportedPath = new URL(url, window.location.href).pathname;
+    } catch (e) {
+      return false;
+    }
+
     for (var i = 0; i < exclusions.length; i++) {
-      if (path.indexOf(exclusions[i]) === 0) {
+      if (
+        path.indexOf(exclusions[i]) === 0 ||
+        reportedPath.indexOf(exclusions[i]) === 0
+      ) {
         return false;
       }
     }
@@ -200,7 +211,6 @@
   // Track a pageview
   function trackPageview(opts) {
     opts = opts || {};
-    var canTrack = shouldTrack();
 
     // Get current page (with hash if hash-mode is enabled)
     var currentPage =
@@ -208,6 +218,9 @@
     if (config.hashMode) {
       currentPage += window.location.hash;
     }
+
+    var currentUrl = absoluteUrl(currentPage);
+    var canTrack = shouldTrack(currentUrl);
 
     // Avoid duplicate pageviews
     if (canTrack && lastPage === currentPage && !opts.force) {
@@ -225,7 +238,7 @@
     if (!canTrack) return;
 
     var payload = buildPayload({
-      path: currentPage,
+      url: currentUrl,
       name: "pageview",
       referrer: opts.referrer,
       session: sessionMarker(),
@@ -249,10 +262,10 @@
       return;
     }
 
-    if (!shouldTrack()) return;
-
     opts = opts || {};
     var payload = buildPayload(opts);
+    if (!shouldTrack(payload.u)) return;
+
     payload.n = eventName;
     sendBeacon(payload);
   }
