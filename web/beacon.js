@@ -28,7 +28,7 @@
   var tracked = false;
   var lastPage = null;
   var sessionStarted = false;
-  var engagementStartedAt = Date.now();
+  var engagementStartedAt = document.hidden ? null : Date.now();
   var engagementMs = 0;
   var maxScrollDepth = 0;
   var scrollQueued = false;
@@ -247,11 +247,11 @@
   }
 
   function updateEngagement() {
-    if (document.hidden) return;
+    if (engagementStartedAt === null) return;
 
     var now = Date.now();
     engagementMs += now - engagementStartedAt;
-    engagementStartedAt = now;
+    engagementStartedAt = document.hidden ? null : now;
   }
 
   function updateScrollDepth() {
