@@ -115,7 +115,8 @@ referrer = "domain"
 acquisition = false
 properties = false
 domain = false # Set to true for multi-site analytics
-
+filter_bots = true # Drop bot/crawler/spider user agents
+include_subdomains = false # Accept subdomains of site.domains
 [limits]
 max_paths = 10000
 max_sources = 500
@@ -124,9 +125,7 @@ max_dimension_values = 1000
 max_property_keys = 50
 max_property_values = 500
 max_events_per_minute = 10000
-
-[server]
-listen_addr = "127.0.0.1:8080"
+max_metrics_per_minute = 60
 ```
 
 ## Usage
@@ -160,8 +159,7 @@ below:
 
 <!-- Track specific domain (multi-site) -->
 <script src="/web/beacon.js" data-domain="example.com" defer></script>
-
-<!-- Hash-based routing (for SPAs) -->
+<!-- Hash-based routing (for SPAs, requires site.path.strip_fragment = false) -->
 <script src="/web/beacon.js" data-hash-mode defer></script>
 
 <!-- Track outbound links -->
@@ -184,11 +182,11 @@ below:
 
 <!-- Combine multiple options -->
 <script
-  src="/web/beacon.js"
-  data-hash-mode
-  data-outbound-links
-  data-file-downloads
-  defer
+    src="/web/beacon.js"
+    data-hash-mode
+    data-outbound-links
+    data-file-downloads
+    defer
 ></script>
 ```
 
@@ -197,9 +195,6 @@ You can also track custom events as follows:
 ```javascript
 // Simple event
 window.watchdog.track("signup");
-
-// Event with custom referrer
-window.watchdog.track("purchase", { referrer: "email-campaign" });
 
 // Event with bounded custom properties. Requires site.collect.properties = true.
 window.watchdog.track("purchase", { props: { plan: "pro" } });
@@ -227,6 +222,14 @@ multi-site deployments provided in the [contrib directory](contrib/grafana/).
 
 Core metrics include:
 
+Watchdog accepts Plausible's event field names (`domain`, `url`, `name`,
+`referrer`, `screen_width`, `props`) alongside its compact `d`/`u`/`n` forms, so
+existing Plausible beacons post successfully. It is not dashboard compatible:
+there is no bounce rate, visit duration, entry/exit pages, returning-visitor
+split, geography, goals, funnels, or revenue. Session starts are per-tab markers
+rather than Plausible-style 30-minute visits, bot traffic is dropped when
+`site.collect.filter_bots` is set, and referrer URLs never retain query strings.
+
 **Traffic metrics:**
 
 - `web_pageviews_total{path,device,referrer,domain}` - Total pageviews. The
@@ -242,9 +245,9 @@ Core metrics include:
 
 **Cardinality metrics:**
 
-- `web_path_overflow_total` - Paths rejected due to cardinality limit
-- `web_referrer_overflow_total` - Referrers rejected due to limit
-- `web_event_overflow_total` - Custom events rejected due to limit
+- `web_path_overflow_total` - Paths collapsed to `other` due to limit
+- `web_referrer_overflow_total` - Referrers collapsed due to limit
+- `web_event_overflow_total` - Custom events collapsed due to limit
 - `web_dimension_overflow_total{dimension}` - Rich dimensions collapsed due to
   limit
 - `web_series_overflow_total` - Metric observations collapsed due to the shared
