@@ -66,7 +66,7 @@ struct AppStateInner {
   /// Validated runtime configuration.
   config:                  Config,
   /// Lowercased site domains allowed to submit events.
-  allowed_domains:         HashSet<String>,
+  allowed_domains:         DomainMatcher,
   /// Sanitized custom event names allowed for ingestion.
   allowed_events:          HashSet<String>,
   /// Networks allowed to set forwarding headers.
@@ -93,6 +93,41 @@ struct AppStateInner {
   metrics:                 Arc<Metrics>,
 }
 
+struct DomainMatcher {
+  exact:       HashSet<String>,
+  suffixes:    Vec<String>,
+  all_allowed: bool,
+}
+
+impl DomainMatcher {
+  fn new(domains: &[String], include_subdomains: bool) -> Self {
+    let exact = domains.iter().cloned().collect();
+    let suffixes = if include_subdomains {
+      domains.iter().map(|domain| format!(".{domain}")).collect()
+    } else {
+      Vec::new()
+    };
+    Self {
+      exact,
+      suffixes,
+      all_allowed: domains.iter().any(|domain| domain == "*"),
+    }
+  }
+
+  fn domain_allowed(&self, domain: &str) -> bool {
+    if self.exact.contains(domain) {
+      return true;
+    }
+    if self.all_allowed {
+      return true;
+    }
+    self
+      .suffixes
+      .iter()
+      .any(|suffix| domain.ends_with(suffix.as_str()))
+  }
+}
+
 impl AppState {
   /// Builds application state from validated configuration and build metadata.
   ///
@@ -107,7 +142,10 @@ impl AppState {
               metrics"
   )]
   pub fn new(config: Config, build_info: BuildInfo) -> Result<Self, AppError> {
-    let allowed_domains = config.site.domains.iter().cloned().collect();
+    let allowed_domains = DomainMatcher::new(
+      &config.site.domains,
+      config.site.collect.include_subdomains,
+    );
     let allowed_events = config
       .site
       .custom_events
@@ -283,77 +321,101 @@ async fn ingest(
   let remote_ip = remote_addr.ip();
   let client_ip = state.client_ip(&headers, remote_ip);
 
-  if let Some(limiter) = state.inner.ingestion_limiter.as_deref()
-    && !limiter.check(client_ip)
-  {
+  if limited(&state, client_ip) {
     return response_with_request_id(
       StatusCode::TOO_MANY_REQUESTS,
       &request_id,
     );
   }
-
-  if state.config().site.sampling < 1.0_f64
-    && rand::random::<f64>() >= state.config().site.sampling
-  {
+  if sampled_out(&state) {
     return response_with_request_id(StatusCode::NO_CONTENT, &request_id);
   }
 
   let event_domain = event.normalize_domain();
   if event
-    .validate(|domain| state.inner.allowed_domains.contains(domain))
+    .validate(|domain| state.inner.allowed_domains.domain_allowed(domain))
     .is_err()
   {
     return response_with_request_id(StatusCode::BAD_REQUEST, &request_id);
   }
 
-  let event_path = event.path();
-  let normalized_path = admit_path(&state, &event_path);
-
   let user_agent = headers
     .get(header::USER_AGENT)
     .and_then(|value| value.to_str().ok())
     .unwrap_or_default();
+  if state.config().site.collect.filter_bots && is_bot(user_agent) {
+    return response_with_request_id(StatusCode::NO_CONTENT, &request_id);
+  }
+  record_observation(&state, &event, &event_domain, client_ip, user_agent);
+
+  response_with_request_id(StatusCode::NO_CONTENT, &request_id)
+}
+
+fn limited(state: &AppState, client_ip: IpAddr) -> bool {
+  state
+    .inner
+    .ingestion_limiter
+    .as_ref()
+    .is_some_and(|limiter| !limiter.check(client_ip))
+}
+
+fn sampled_out(state: &AppState) -> bool {
+  state.config().site.sampling < 1.0_f64
+    && rand::random::<f64>() >= state.config().site.sampling
+}
+
+fn record_observation(
+  state: &AppState,
+  event: &Event,
+  event_domain: &str,
+  client_ip: IpAddr,
+  user_agent: &str,
+) {
+  let event_path = event.path();
+  let normalized_path = admit_path(state, &event_path);
   state
     .inner
     .metrics
     .add_unique(&client_ip.to_string(), user_agent);
 
   let labels = metric_labels(
-    &state,
-    &event,
+    state,
+    event,
     &event_path,
-    &event_domain,
+    event_domain,
     &normalized_path,
     user_agent,
   );
+  dispatch_event(state, event, &labels);
+}
+
+fn dispatch_event(state: &AppState, event: &Event, labels: &DimensionLabels) {
   let event_name = event.event_name();
   let is_pageview = is_pageview_event(&event_name);
   let event_label = (!is_pageview)
-    .then(|| bounded_event_label(&state, &event_name))
+    .then(|| bounded_event_label(state, &event_name))
     .flatten();
 
   if event.is_new_session() && state.config().site.collect.sessions {
-    state.inner.metrics.record_session(&labels);
+    state.inner.metrics.record_session(labels);
   }
 
   if is_pageview {
-    record_pageview(&state, &labels);
+    record_pageview(state, labels);
   } else if let Some(admitted_label) = event_label.as_deref() {
-    record_event(&state, admitted_label, &labels);
+    record_event(state, admitted_label, labels);
   }
 
-  record_engagement(&state, &event, &labels);
+  record_engagement(state, event, labels);
   record_properties(
-    &state,
+    state,
     if is_pageview {
       Some("pageview")
     } else {
       event_label.as_deref()
     },
-    &event,
+    event,
   );
-
-  response_with_request_id(StatusCode::NO_CONTENT, &request_id)
 }
 
 /// Admits a normalized path or collapses it to other when the registry is full.
@@ -908,7 +970,7 @@ fn classify_browser(user_agent: &str) -> String {
   if ua.is_empty() {
     return "unknown".to_owned();
   }
-  if ua.contains("bot") || ua.contains("crawler") || ua.contains("spider") {
+  if is_bot(user_agent) {
     return "bot".to_owned();
   }
   if ua.contains("edg/") || ua.contains("edge/") {
@@ -928,6 +990,11 @@ fn classify_browser(user_agent: &str) -> String {
     return "safari".to_owned();
   }
   "other".to_owned()
+}
+
+fn is_bot(user_agent: &str) -> bool {
+  let ua = user_agent.to_ascii_lowercase();
+  ua.contains("bot") || ua.contains("crawler") || ua.contains("spider")
 }
 
 /// Classifies an operating system family from a user agent string.
@@ -1162,5 +1229,25 @@ mod tests {
       b"admin:longer-secret"
     ));
     assert!(!constant_time_equal(b"admin:secret", b"user:secret"));
+  }
+
+  #[test]
+  fn matches_domains_and_subdomains() {
+    let matcher = DomainMatcher::new(&["example.com".to_owned()], false);
+    assert!(matcher.domain_allowed("example.com"));
+    assert!(!matcher.domain_allowed("blog.example.com"));
+    assert!(!matcher.domain_allowed("notexample.com"));
+
+    let matcher = DomainMatcher::new(&["example.com".to_owned()], true);
+    assert!(matcher.domain_allowed("example.com"));
+    assert!(matcher.domain_allowed("blog.example.com"));
+    assert!(!matcher.domain_allowed("notexample.com"));
+    assert!(!matcher.domain_allowed("example.com.evil.com"));
+  }
+
+  #[test]
+  fn detects_bots() {
+    assert!(is_bot("Mozilla/5.0 (compatible; Googlebot/2.1)"));
+    assert!(!is_bot("Mozilla/5.0 Firefox/120.0"));
   }
 }
