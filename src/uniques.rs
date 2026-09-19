@@ -2,12 +2,12 @@ use std::path::Path;
 
 use cardinality_estimator_safe::{Element, Sketch};
 use data_encoding::HEXLOWER;
+use hmac_sha256::Hash as Sha256;
+use jiff::{Timestamp, tz::Offset};
 use parking_lot::Mutex;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
-use time::OffsetDateTime;
 
 use crate::config::SaltRotation;
 
@@ -54,7 +54,7 @@ struct UniquesInner {
 
 impl UniquesInner {
   fn rotate_if_expired(&mut self, rotation: SaltRotation) {
-    let current_key = salt_key(OffsetDateTime::now_utc(), rotation);
+    let current_key = salt_key(Timestamp::now(), rotation);
     if current_key == self.salt_key {
       return;
     }
@@ -68,7 +68,7 @@ impl UniquesInner {
 impl UniquesEstimator {
   /// Creates a new estimator for the configured salt rotation period.
   pub fn new(rotation: SaltRotation) -> Self {
-    let salt_key = salt_key(OffsetDateTime::now_utc(), rotation);
+    let salt_key = salt_key(Timestamp::now(), rotation);
     Self {
       rotation,
       inner: Mutex::new(UniquesInner {
@@ -170,23 +170,25 @@ fn tmp_path(path: &Path) -> std::path::PathBuf {
   std::path::PathBuf::from(name)
 }
 
-fn salt_key(now: OffsetDateTime, rotation: SaltRotation) -> String {
+fn salt_key(now: Timestamp, rotation: SaltRotation) -> String {
+  let datetime = Offset::UTC.to_datetime(now);
+
   match rotation {
     SaltRotation::Daily => {
       format!(
         "{:04}-{:02}-{:02}",
-        now.year(),
-        u8::from(now.month()),
-        now.day()
+        datetime.year(),
+        datetime.month(),
+        datetime.day()
       )
     },
     SaltRotation::Hourly => {
       format!(
         "{:04}-{:02}-{:02}T{:02}",
-        now.year(),
-        u8::from(now.month()),
-        now.day(),
-        now.hour()
+        datetime.year(),
+        datetime.month(),
+        datetime.day(),
+        datetime.hour()
       )
     },
   }
@@ -202,7 +204,7 @@ fn generate_salt(key: &str) -> String {
 }
 
 fn hash_visitor(ip: &str, user_agent: &str, salt: &str) -> u64 {
-  let digest = Sha256::digest(format!("{ip}|{user_agent}|{salt}").as_bytes());
+  let digest = Sha256::hash(format!("{ip}|{user_agent}|{salt}").as_bytes());
   let bytes = digest[..8]
     .try_into()
     .expect("SHA-256 has at least eight bytes");
