@@ -9,16 +9,21 @@ use crate::{config::PathConfig, limits::MAX_PATH_LEN};
 /// Normalizes request paths into bounded, low-cardinality metric labels.
 #[derive(Debug, Clone)]
 pub struct PathNormalizer {
+  /// Active path normalization rules.
   config: PathConfig,
 }
 
 impl PathNormalizer {
   /// Creates a path normalizer using the configured normalization rules.
-  pub fn new(config: PathConfig) -> Self {
+  #[must_use]
+  #[inline]
+  pub const fn new(config: PathConfig) -> Self {
     Self { config }
   }
 
   /// Normalizes an input path into a stable label value.
+  #[must_use]
+  #[inline]
   pub fn normalize(&self, input: &str) -> String {
     if input.is_empty() || input.len() > MAX_PATH_LEN {
       return "/".to_owned();
@@ -43,14 +48,14 @@ impl PathNormalizer {
         ".." => {
           segments.pop();
         },
-        segment => segments.push(segment.to_owned()),
+        owned => segments.push(owned.to_owned()),
       }
     }
 
     if self.config.collapse_numeric_segments {
       for segment in &mut segments {
         if segment.bytes().all(|byte| byte.is_ascii_digit()) {
-          *segment = ":id".to_owned();
+          segment.clone_from(&":id".to_owned());
         }
       }
     }
@@ -88,6 +93,8 @@ impl PathNormalizer {
 
 /// Extracts a low-cardinality external referrer domain or an internal/direct
 /// label.
+#[must_use]
+#[inline]
 pub fn extract_referrer_domain(
   referrer: &str,
   site_domain: &str,
@@ -106,6 +113,8 @@ pub fn extract_referrer_domain(
 }
 
 /// Extracts a sanitized external referrer URL or an internal/direct label.
+#[must_use]
+#[inline]
 pub fn extract_referrer_url(
   referrer: &str,
   site_domain: &str,
@@ -117,22 +126,31 @@ pub fn extract_referrer_url(
   }
 
   let mut url = Url::parse(referrer).ok()?;
-  let _ = url.set_username("");
-  let _ = url.set_password(None);
+  if url.set_username("").is_err() {
+    return None;
+  }
+  if url.set_password(None).is_err() {
+    return None;
+  }
   url.set_fragment(None);
   Some(url.to_string())
 }
 
+/// Classifies a referrer host as direct, internal, or external.
 #[derive(Debug, PartialEq, Eq)]
 enum ReferrerHostClassification {
+  /// Missing referrer, treated as direct traffic.
   Direct,
+  /// Loopback, private, or link-local host.
   Internal,
+  /// Any other routable host.
   External,
 }
 
 impl ReferrerHostClassification {
-  fn as_label(&self) -> &'static str {
-    match self {
+  /// Returns the metric label for this host classification.
+  const fn as_label(&self) -> &'static str {
+    match *self {
       Self::Direct => "direct",
       Self::Internal => "internal",
       Self::External => "external",
@@ -140,11 +158,16 @@ impl ReferrerHostClassification {
   }
 }
 
+/// Parsed referrer host with its traffic classification.
 struct ReferrerHost {
+  /// Lowercased hostname without trailing dot.
   hostname:       String,
+  /// Traffic classification for the hostname.
   classification: ReferrerHostClassification,
 }
 
+/// Returns the parsed referrer host for a raw referrer string.
+#[inline]
 fn normalized_referrer_host(
   referrer: &str,
   site_domain: &str,
@@ -177,8 +200,9 @@ fn normalized_referrer_host(
     });
   }
 
-  let site_domain = site_domain.trim_end_matches('.').to_ascii_lowercase();
-  if hostname == site_domain || hostname.ends_with(&format!(".{site_domain}")) {
+  let trimmed_site = site_domain.trim_end_matches('.').to_ascii_lowercase();
+  if hostname == trimmed_site || hostname.ends_with(&format!(".{trimmed_site}"))
+  {
     return Some(ReferrerHost {
       hostname,
       classification: ReferrerHostClassification::Direct,
@@ -191,10 +215,13 @@ fn normalized_referrer_host(
   })
 }
 
-fn is_internal_ipv4(ip: Ipv4Addr) -> bool {
+/// Returns true for private, loopback, or link-local IPv4 addresses.
+const fn is_internal_ipv4(ip: Ipv4Addr) -> bool {
   ip.is_private() || ip.is_loopback() || ip.is_link_local()
 }
 
+/// Returns true for loopback, private, or link-local IPv6 addresses.
+#[inline]
 fn is_internal_ipv6(ip: Ipv6Addr) -> bool {
   ip.is_loopback()
     || ip.is_unique_local()
