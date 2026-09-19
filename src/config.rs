@@ -53,6 +53,8 @@ pub enum ConfigError {
   InvalidCors,
   #[error("security.trusted_proxies contains an invalid IP or CIDR: {0}")]
   InvalidTrustedProxy(String),
+  #[error("server.state_path must not be empty")]
+  InvalidStatePath,
   #[error("server.{field} must start with '/'")]
   InvalidServerPath { field: &'static str },
   #[error("server.metrics_path and server.ingestion_path must be distinct")]
@@ -480,6 +482,9 @@ impl Config {
   }
 
   fn validate_server(&self) -> Result<(), ConfigError> {
+    if self.server.state_path.trim().is_empty() {
+      return Err(ConfigError::InvalidStatePath);
+    }
     if self.server.listen_addr.parse::<SocketAddr>().is_err() {
       return Err(ConfigError::InvalidListenAddr(
         self.server.listen_addr.clone(),
@@ -666,6 +671,12 @@ mod tests {
       Err(ConfigError::InvalidListenAddr(_))
     ));
     config.server.listen_addr = "127.0.0.1:8080".to_owned();
+    config.server.state_path.clear();
+    assert!(matches!(
+      config.validate(),
+      Err(ConfigError::InvalidStatePath)
+    ));
+    config.server.state_path = "/var/lib/watchdog/hll.state".to_owned();
 
     config.server.metrics_path = "/metrics/{id}".to_owned();
     assert!(matches!(
