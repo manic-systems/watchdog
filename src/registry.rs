@@ -49,6 +49,7 @@ impl BoundedRegistry {
   }
 
   /// Returns whether a value has already been accepted by the registry.
+  #[inline]
   pub fn contains(&self, value: &str) -> bool {
     self.entries.read().contains(value)
   }

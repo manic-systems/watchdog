@@ -93,12 +93,16 @@ struct AppStateInner {
   metrics:                 Arc<Metrics>,
 }
 
+/// Matches beacon domains against exact names and subdomain suffixes.
 struct DomainMatcher {
+  /// Lowercased exact domains allowed to submit events.
   exact:    HashSet<String>,
+  /// Leading-dot suffixes allowed when subdomains are included.
   suffixes: Vec<String>,
 }
 
 impl DomainMatcher {
+  /// Builds a matcher from allowed domains and subdomain policy.
   fn new(domains: &[String], include_subdomains: bool) -> Self {
     let exact = domains.iter().cloned().collect();
     let suffixes = if include_subdomains {
@@ -109,6 +113,7 @@ impl DomainMatcher {
     Self { exact, suffixes }
   }
 
+  /// Returns true when the domain is an exact or suffix match.
   fn domain_allowed(&self, domain: &str) -> bool {
     if self.exact.contains(domain) {
       return true;
@@ -342,7 +347,7 @@ async fn ingest(
 
   response_with_request_id(StatusCode::NO_CONTENT, &request_id)
 }
-
+/// Returns true when the ingestion limiter rejects this client address.
 fn limited(state: &AppState, client_ip: IpAddr) -> bool {
   state
     .inner
@@ -350,12 +355,12 @@ fn limited(state: &AppState, client_ip: IpAddr) -> bool {
     .as_ref()
     .is_some_and(|limiter| !limiter.check(client_ip))
 }
-
+/// Returns true when random sampling drops this event.
 fn sampled_out(state: &AppState) -> bool {
   state.config().site.sampling < 1.0_f64
     && rand::random::<f64>() >= state.config().site.sampling
 }
-
+/// Records one observation across uniques, dimensions, and event counters.
 fn record_observation(
   state: &AppState,
   event: &Event,
@@ -380,7 +385,7 @@ fn record_observation(
   );
   dispatch_event(state, event, &labels);
 }
-
+/// Dispatches pageview and custom event counters from one observation.
 fn dispatch_event(state: &AppState, event: &Event, labels: &DimensionLabels) {
   let event_name = event.event_name();
   let is_pageview = is_pageview_event(&event_name);
@@ -984,6 +989,7 @@ fn classify_browser(user_agent: &str) -> String {
   "other".to_owned()
 }
 
+/// Returns true for known bot and crawler user agents.
 fn is_bot(user_agent: &str) -> bool {
   let ua = user_agent.to_ascii_lowercase();
   ua.contains("bot") || ua.contains("crawler") || ua.contains("spider")
@@ -1225,19 +1231,20 @@ mod tests {
 
   #[test]
   fn matches_domains_and_subdomains() {
-    let matcher = DomainMatcher::new(&["example.com".to_owned()], false);
-    assert!(matcher.domain_allowed("example.com"));
-    assert!(!matcher.domain_allowed("blog.example.com"));
-    assert!(!matcher.domain_allowed("notexample.com"));
+    let exact_matcher = DomainMatcher::new(&["example.com".to_owned()], false);
+    assert!(exact_matcher.domain_allowed("example.com"));
+    assert!(!exact_matcher.domain_allowed("blog.example.com"));
+    assert!(!exact_matcher.domain_allowed("notexample.com"));
 
-    let matcher = DomainMatcher::new(&["example.com".to_owned()], true);
-    assert!(matcher.domain_allowed("example.com"));
-    assert!(matcher.domain_allowed("blog.example.com"));
-    assert!(!matcher.domain_allowed("notexample.com"));
-    assert!(!matcher.domain_allowed("example.com.evil.com"));
+    let subdomain_matcher =
+      DomainMatcher::new(&["example.com".to_owned()], true);
+    assert!(subdomain_matcher.domain_allowed("example.com"));
+    assert!(subdomain_matcher.domain_allowed("blog.example.com"));
+    assert!(!subdomain_matcher.domain_allowed("notexample.com"));
+    assert!(!subdomain_matcher.domain_allowed("example.com.evil.com"));
 
-    let matcher = DomainMatcher::new(&["*".to_owned()], true);
-    assert!(!matcher.domain_allowed("example.com"));
+    let wildcard_matcher = DomainMatcher::new(&["*".to_owned()], true);
+    assert!(!wildcard_matcher.domain_allowed("example.com"));
   }
 
   #[test]
