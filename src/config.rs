@@ -6,11 +6,12 @@ use std::{
 
 use figment::{
   Figment,
-  providers::{Env, Format, Toml},
+  providers::{Env, Format},
 };
 use ipnet::IpNet;
-use serde::Deserialize;
+use serde::{Deserialize, de::DeserializeOwned};
 use thiserror::Error;
+use toml::de::Error as TomlError;
 /// Errors produced while loading or validating configuration.
 #[derive(Debug, Error)]
 pub enum ConfigError {
@@ -284,6 +285,20 @@ pub struct Overrides {
   pub listen_addr:    Option<String>,
   pub metrics_path:   Option<String>,
   pub ingestion_path: Option<String>,
+}
+
+struct Toml;
+
+impl Format for Toml {
+  type Error = TomlError;
+
+  const NAME: &'static str = "TOML";
+
+  fn from_str<Value: DeserializeOwned>(
+    input: &str,
+  ) -> Result<Value, Self::Error> {
+    toml::from_str(input)
+  }
 }
 
 /// Loads configuration from defaults, an optional TOML file, environment, and
