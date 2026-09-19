@@ -393,6 +393,7 @@ impl Config {
     Ok(())
   }
 
+  /// Normalizes domains and rejects empty domain lists.
   fn normalize_domains(domains: &mut Vec<String>) -> Result<(), ConfigError> {
     *domains = domains
       .iter()
@@ -405,6 +406,7 @@ impl Config {
     Ok(())
   }
 
+  /// Trims custom event names and drops empty entries.
   fn normalize_events(events: &mut Vec<String>) {
     *events = events
       .iter()
@@ -413,6 +415,7 @@ impl Config {
       .collect();
   }
 
+  /// Rejects sampling rates outside the zero to one range.
   fn validate_site(&self) -> Result<(), ConfigError> {
     if !(0.0_f64..=1.0_f64).contains(&self.site.sampling) {
       return Err(ConfigError::InvalidSampling);
@@ -420,6 +423,7 @@ impl Config {
     Ok(())
   }
 
+  /// Rejects zero-valued cardinality and rate limits.
   fn validate_limits(&self) -> Result<(), ConfigError> {
     nonzero(self.limits.max_paths, ConfigError::InvalidMaxPaths)?;
     nonzero(self.limits.max_sources, ConfigError::InvalidMaxSources)?;
@@ -458,6 +462,7 @@ impl Config {
     Ok(())
   }
 
+  /// Rejects incomplete metrics authentication and CORS settings.
   fn validate_security(&self) -> Result<(), ConfigError> {
     if self.security.metrics_auth.enabled
       && (self.security.metrics_auth.username.is_empty()
@@ -481,6 +486,7 @@ impl Config {
     Ok(())
   }
 
+  /// Rejects invalid listen addresses and endpoint paths.
   fn validate_server(&self) -> Result<(), ConfigError> {
     if self.server.state_path.trim().is_empty() {
       return Err(ConfigError::InvalidStatePath);
@@ -505,6 +511,7 @@ impl Config {
   }
 }
 
+/// Rejects zero-valued limits with the matching configuration error.
 fn nonzero<T>(value: T, error: ConfigError) -> Result<(), ConfigError>
 where
   T: PartialEq + Default + Copy,

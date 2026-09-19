@@ -128,6 +128,7 @@ impl UniquesEstimator {
   }
 
   /// Returns a serialized snapshot without holding the lock across I/O.
+  #[inline]
   fn snapshot(&self) -> Result<Vec<u8>, UniqueStateError> {
     self.rotate_if_needed();
     let inner = self.inner.lock();
@@ -136,9 +137,12 @@ impl UniquesEstimator {
       salt:     &inner.salt,
       hll:      &inner.hll,
     };
-    postcard::to_stdvec(&persisted).map_err(UniqueStateError::Serialize)
+    let data =
+      postcard::to_stdvec(&persisted).map_err(UniqueStateError::Serialize)?;
+    drop(inner);
+    Ok(data)
   }
-
+  /// Rotates salt and sketch when the rotation period has rolled over.
   fn rotate_if_needed(&self) {
     let current_key = salt_key(Timestamp::now(), self.rotation);
     let mut inner = self.inner.lock();
@@ -188,11 +192,6 @@ impl UniquesEstimator {
   ///
   /// Returns an error when the state file cannot be written.
   #[inline]
-  #[expect(
-    clippy::significant_drop_tightening,
-    reason = "guard must cover rotate plus snapshot so concurrent observers \
-              cannot interleave a rotation between them"
-  )]
   pub async fn save(&self, path: &Path) -> Result<(), UniqueStateError> {
     let data = self.snapshot()?;
 
@@ -213,17 +212,18 @@ impl UniquesEstimator {
   }
 }
 
+/// Persists estimator state through an atomic temp file rename.
 async fn write_atomic(
   path: &Path,
   data: &[u8],
 ) -> Result<(), UniqueStateError> {
   let temp_path = tmp_path(path);
-  if let Err(err) = tokio::fs::write(&temp_path, data).await {
-    let _ = tokio::fs::remove_file(&temp_path).await;
+  if let Err(err) = fs::write(&temp_path, data).await {
+    drop(fs::remove_file(&temp_path).await);
     return Err(UniqueStateError::Write(err));
   }
-  if let Err(err) = tokio::fs::rename(&temp_path, path).await {
-    let _ = tokio::fs::remove_file(&temp_path).await;
+  if let Err(err) = fs::rename(&temp_path, path).await {
+    drop(fs::remove_file(&temp_path).await);
     return Err(UniqueStateError::Write(err));
   }
   Ok(())

@@ -324,6 +324,7 @@ impl Event {
     self.validate_bounds()
   }
 
+  /// Rejects out-of-range paths, names, referrers, widths, and telemetry.
   fn validate_bounds(&self) -> Result<(), EventError> {
     let path = self.path();
     if path.is_empty() {
@@ -348,6 +349,7 @@ impl Event {
     Ok(())
   }
 
+  /// Rejects nonpositive or nonfinite engagement durations.
   fn validate_telemetry(&self) -> Result<(), EventError> {
     #[expect(
       clippy::pattern_type_mismatch,
@@ -560,7 +562,7 @@ mod tests {
     )
     .unwrap();
 
-    assert!(event.validate(|domain| domain == "example.com").is_ok());
+    event.validate(|domain| domain == "example.com").unwrap();
     assert_eq!(event.path(), "/docs");
     assert_eq!(event.event_name(), "pageview");
     assert_eq!(event.properties().get("tier"), Some(&"paid".to_owned()));
