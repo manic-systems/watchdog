@@ -60,8 +60,8 @@ jobs:
       - name: Check dependencies
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          arguments: --locked check
-          deny-file: deny.toml
+          arguments: --locked
+          rust-version: stable
 
       - name: Build
         run: cargo build --locked --release
