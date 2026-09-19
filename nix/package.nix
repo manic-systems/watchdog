@@ -5,9 +5,10 @@
 }: let
   cargoToml = lib.importTOML ../Cargo.toml;
 in
-  rustPlatform.buildRustPackage {
+  rustPlatform.buildRustPackage (finalAttrs: {
     pname = "watchdog";
     version = cargoToml.package.version;
+    __structuredAttrs = true;
 
     src = let
       fs = lib.fileset;
@@ -23,7 +24,8 @@ in
         ];
       };
 
-    cargoLock.lockFile = ../Cargo.lock;
+    useNextest = true;
+    cargoLock.lockFile = "${finalAttrs.src}/Cargo.lock";
 
     env = {
       WATCHDOG_COMMIT = self.rev or self.dirtyRev or "unknown";
@@ -32,9 +34,10 @@ in
 
     meta = {
       description = "Privacy-preserving web analytics with Prometheus-native metrics";
-      homepage = "https://github.com/notashelf/watchdog";
+      homepage = "https://github.com/manic-systems/watchdog";
       license = lib.licenses.eupl12;
-      maintainers = with lib.maintainers; [NotAShelf];
+      maintainers = with lib.maintainers; [NotAShelf amaanq];
       mainProgram = "watchdog";
+      platforms = lib.platforms.linux;
     };
-  }
+  })
