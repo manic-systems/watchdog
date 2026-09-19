@@ -25,6 +25,7 @@ allow = [
   "Unlicense",
 ]
 confidence-threshold = 0.8
+exceptions = [ { name = "hmac-sha256", allow = [ "ISC" ] } ]
 
 [licenses.private]
 ignore = true
