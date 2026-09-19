@@ -183,6 +183,9 @@ sum by (device) (rate(web_pageviews_total[1h]))
 
 ### Unique Visitors
 
+Daily rotation exposes `web_daily_unique_visitors`; hourly rotation exposes
+`web_hourly_unique_visitors`.
+
 ```promql
 web_daily_unique_visitors
 ```

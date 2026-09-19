@@ -241,7 +241,8 @@ rather than Plausible-style 30-minute visits, bot traffic is dropped when
 - `web_engagement_seconds_total{path,...}` - Aggregate active engagement time
 - `web_scroll_depth_total{path,depth,...}` - Scroll-depth reports
 - `web_custom_properties_total{event,key,value}` - Bounded custom properties
-- `web_daily_unique_visitors` - Estimated unique visitors (HyperLogLog)
+- `web_daily_unique_visitors` / `web_hourly_unique_visitors` - Estimated unique
+  visitors for the configured salt rotation period
 
 **Cardinality metrics:**
 
