@@ -5,8 +5,10 @@ use std::{
 };
 
 use parking_lot::Mutex;
+#[cfg(target_os = "linux")]
+use prometheus::process_collector::ProcessCollector;
 use prometheus::{
-  Encoder,
+  Encoder as _,
   Gauge,
   IntCounter,
   Opts,
@@ -45,36 +47,69 @@ pub struct DimensionLabels {
 
 /// Prometheus metric registry and bounded recording helpers.
 pub struct Metrics {
+  /// Registry exported by the metrics endpoint.
   registry:           Registry,
+  /// Pageview counter keyed by dimension labels.
   pageviews:          CounterFamily<AtomicF64>,
+  /// Non-pageview event counter keyed by event and dimensions.
   events:             CounterFamily<AtomicF64>,
+  /// Aggregate custom-event counter keyed by event name.
   custom_events:      CounterFamily<AtomicF64>,
+  /// Reported session-start counter keyed by dimensions.
   sessions:           CounterFamily<AtomicF64>,
+  /// Active engagement time counter keyed by dimensions.
   engagement_seconds: CounterFamily<AtomicF64>,
+  /// Scroll-depth counter keyed by dimensions and depth bucket.
   scroll_depth:       CounterFamily<AtomicU64>,
+  /// Custom property observation counter keyed by event and pair.
   custom_properties:  CounterFamily<AtomicU64>,
+  /// Shared budget bounding admitted series and bytes.
   series_budget:      Mutex<SeriesBudget>,
+  /// Observations collapsed by the shared series budget.
   series_overflow:    IntCounter,
+  /// Paths rejected by the path cardinality limit.
   path_overflow:      IntCounter,
+  /// Referrers rejected by the referrer cardinality limit.
   referrer_overflow:  IntCounter,
+  /// Custom events rejected by the event cardinality limit.
   event_overflow:     IntCounter,
+  /// Dimension values collapsed by their cardinality limits.
   dimension_overflow: CounterFamily<AtomicU64>,
+  /// Embedded asset requests blocked by security filters.
   blocked_requests:   CounterFamily<AtomicU64>,
+  /// Estimated unique visitors for the current salt period.
   daily_uniques:      Gauge,
+  /// Ordered label names matching dimension value order.
   label_names:        Vec<&'static str>,
+  /// Collection flags selecting exported dimensions.
   collect:            CollectConfig,
+  /// Unique visitor estimator when unique tracking is enabled.
   uniques:            Option<Arc<UniquesEstimator>>,
 }
 
+/// Budget tracking admitted series and estimated encoded bytes.
 #[derive(Default)]
 struct SeriesBudget {
+  /// Admitted label sets keyed by metric name.
   series: HashMap<String, HashSet<Vec<String>>>,
+  /// Estimated encoded bytes for admitted series.
   bytes:  usize,
 }
 
 impl Metrics {
   /// Creates a metrics registry configured from collection flags and build
   /// metadata.
+  ///
+  /// # Errors
+  ///
+  /// Returns `prometheus::Error` when a descriptor fails validation or a
+  /// collector fails to register.
+  #[inline]
+  #[expect(
+    clippy::too_many_lines,
+    reason = "constructor wires sixteen fixed collectors, splitting would \
+              hide registration order"
+  )]
   pub fn new(
     config: &Config,
     build_info: &BuildInfo,
@@ -175,7 +210,7 @@ impl Metrics {
         ("build_date".to_owned(), build_info.build_date.clone()),
       ])),
     )?;
-    build_info_metric.set(1.0);
+    build_info_metric.set(1.0_f64);
 
     let start_time = Gauge::with_opts(Opts::new(
       "watchdog_start_time_seconds",
@@ -184,11 +219,11 @@ impl Metrics {
     start_time.set(
       SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0.0, |duration| duration.as_secs_f64()),
+        .map_or(0.0_f64, |duration| duration.as_secs_f64()),
     );
 
-    for collector in [
-      Box::new(pageviews.clone()) as Box<dyn prometheus::core::Collector>,
+    let collectors: [Box<dyn Collector>; 16] = [
+      Box::new(pageviews.clone()),
       Box::new(events.clone()),
       Box::new(custom_events.clone()),
       Box::new(sessions.clone()),
@@ -204,14 +239,13 @@ impl Metrics {
       Box::new(daily_uniques.clone()),
       Box::new(build_info_metric),
       Box::new(start_time),
-    ] {
+    ];
+    for collector in collectors {
       registry.register(collector)?;
     }
 
     #[cfg(target_os = "linux")]
-    registry.register(Box::new(
-      prometheus::process_collector::ProcessCollector::for_self(),
-    ))?;
+    registry.register(Box::new(ProcessCollector::for_self()))?;
 
     Ok(Self {
       registry,
@@ -240,11 +274,13 @@ impl Metrics {
   }
 
   /// Returns the unique visitor estimator when unique tracking is enabled.
+  #[inline]
   pub fn uniques(&self) -> Option<Arc<UniquesEstimator>> {
     self.uniques.clone()
   }
 
   /// Increments the pageview counter with configured dimension labels.
+  #[inline]
   pub fn record_pageview(&self, labels: &DimensionLabels) {
     let values = self.label_values(labels);
     let bounded = self.bounded_labels(&self.pageviews, values);
@@ -252,6 +288,7 @@ impl Metrics {
   }
 
   /// Increments the non-pageview event counter with configured labels.
+  #[inline]
   pub fn record_event(&self, event_name: &str, labels: &DimensionLabels) {
     let mut values = vec![sanitize_label(event_name)];
     values.extend(self.label_values(labels));
@@ -260,6 +297,7 @@ impl Metrics {
   }
 
   /// Increments the aggregate custom-event counter by event name.
+  #[inline]
   pub fn record_custom_event(&self, event_name: &str) {
     let values = vec![sanitize_label(event_name)];
     let bounded = self.bounded_labels(&self.custom_events, values);
@@ -267,6 +305,7 @@ impl Metrics {
   }
 
   /// Increments the reported session-start counter.
+  #[inline]
   pub fn record_session(&self, labels: &DimensionLabels) {
     let values = self.label_values(labels);
     let bounded = self.bounded_labels(&self.sessions, values);
@@ -274,12 +313,13 @@ impl Metrics {
   }
 
   /// Adds positive finite engagement seconds to the engagement counter.
+  #[inline]
   pub fn record_engagement_seconds(
     &self,
     labels: &DimensionLabels,
     seconds: f64,
   ) {
-    if seconds <= 0.0 || !seconds.is_finite() {
+    if seconds <= 0.0_f64 || !seconds.is_finite() {
       return;
     }
 
@@ -292,6 +332,7 @@ impl Metrics {
   }
 
   /// Increments the bucketed scroll-depth counter.
+  #[inline]
   pub fn record_scroll_depth(&self, labels: &DimensionLabels, depth: u8) {
     let mut values = self.label_values(labels);
     values.push(scroll_depth_bucket(depth).to_owned());
@@ -300,6 +341,7 @@ impl Metrics {
   }
 
   /// Increments the custom-property observation counter.
+  #[inline]
   pub fn record_custom_property(
     &self,
     event_name: &str,
@@ -317,24 +359,28 @@ impl Metrics {
   }
 
   /// Records that a path was dropped because the path registry was full.
+  #[inline]
   pub fn record_path_overflow(&self) {
     self.path_overflow.inc();
   }
 
   /// Records that a referrer was collapsed because the referrer registry was
   /// full.
+  #[inline]
   pub fn record_referrer_overflow(&self) {
     self.referrer_overflow.inc();
   }
 
   /// Records that a custom event was collapsed because the event registry was
   /// full.
+  #[inline]
   pub fn record_event_overflow(&self) {
     self.event_overflow.inc();
   }
 
   /// Records that a named dimension value was collapsed because its registry
   /// was full.
+  #[inline]
   pub fn record_dimension_overflow(&self, dimension: &str) {
     let values = vec![sanitize_label(dimension)];
     let bounded = self.bounded_labels(&self.dimension_overflow, values);
@@ -342,6 +388,7 @@ impl Metrics {
   }
 
   /// Records a blocked embedded-asset request by reason.
+  #[inline]
   pub fn record_blocked_request(&self, reason: &'static str) {
     let values = vec![sanitize_label(reason)];
     let bounded = self.bounded_labels(&self.blocked_requests, values);
@@ -349,20 +396,27 @@ impl Metrics {
   }
 
   /// Adds a visitor observation to the unique visitor estimator, if enabled.
+  #[inline]
   pub fn add_unique(&self, ip: &str, user_agent: &str) {
-    if let Some(uniques) = &self.uniques {
+    if let Some(uniques) = self.uniques.as_ref() {
       uniques.add(ip, user_agent);
     }
   }
 
   /// Updates the exported unique visitor gauge from the estimator.
+  #[inline]
   pub fn update_unique_gauge(&self) {
-    if let Some(uniques) = &self.uniques {
+    if let Some(uniques) = self.uniques.as_ref() {
       self.daily_uniques.set(uniques.estimate());
     }
   }
 
   /// Encodes all registered metrics in Prometheus text format.
+  ///
+  /// # Errors
+  ///
+  /// Returns `prometheus::Error` when gathering or encoding the registry fails.
+  #[inline]
   pub fn encode(&self) -> Result<String, prometheus::Error> {
     self.update_unique_gauge();
 
@@ -372,6 +426,12 @@ impl Metrics {
     Ok(String::from_utf8(buffer).unwrap_or_default())
   }
 
+  /// Bounds label cardinality against the shared series budget.
+  #[expect(
+    clippy::significant_drop_tightening,
+    reason = "budget lock guards check, insert, and byte accounting as one \
+              atomic admission"
+  )]
   fn bounded_labels(
     &self,
     metric: &impl Collector,
@@ -381,13 +441,17 @@ impl Metrics {
     const MAX_ENCODED_F64_LEN: usize = 327;
 
     let descriptors = metric.desc();
+    #[expect(
+      clippy::expect_used,
+      reason = "counter families are built with exactly one descriptor"
+    )]
     let descriptor = descriptors
       .first()
       .expect("counter families have one descriptor");
 
     let mut budget = self.series_budget.lock();
-    let SeriesBudget { series, bytes } = &mut *budget;
-    let entries = series.entry(descriptor.fq_name.clone()).or_default();
+    let state = &mut *budget;
+    let entries = state.series.entry(descriptor.fq_name.clone()).or_default();
 
     if entries.contains(values.as_slice()) {
       return values;
@@ -403,7 +467,7 @@ impl Metrics {
         .map(|(name, value)| name.len() + 4 + 2 * value.len())
         .sum::<usize>();
 
-    if *bytes + encoded_bytes
+    if state.bytes + encoded_bytes
       > MAX_METRICS_RESPONSE_SIZE - METADATA_AND_OVERFLOW_RESERVE
     {
       self.series_overflow.inc();
@@ -411,10 +475,11 @@ impl Metrics {
     }
 
     entries.insert(values.clone());
-    *bytes += encoded_bytes;
+    state.bytes += encoded_bytes;
     values
   }
 
+  /// Builds ordered label values matching the configured label names.
   fn label_values(&self, labels: &DimensionLabels) -> Vec<String> {
     let mut values = Vec::with_capacity(self.label_names.len());
     values.push(sanitize_label(&labels.path));
@@ -476,6 +541,7 @@ impl Metrics {
   }
 }
 
+/// Builds ordered label names from the collection flags.
 fn metric_label_names(collect: &CollectConfig) -> Vec<&'static str> {
   let mut labels = vec!["path"];
   if collect.country {
@@ -513,7 +579,8 @@ fn metric_label_names(collect: &CollectConfig) -> Vec<&'static str> {
   labels
 }
 
-fn scroll_depth_bucket(depth: u8) -> &'static str {
+/// Buckets scroll depth into labeled percentage bands.
+const fn scroll_depth_bucket(depth: u8) -> &'static str {
   match depth {
     0..=24 => "0",
     25..=49 => "25",
@@ -525,18 +592,20 @@ fn scroll_depth_bucket(depth: u8) -> &'static str {
 }
 
 /// Sanitizes a user-controlled value before it is used as a Prometheus label.
+#[inline]
+#[must_use]
 pub fn sanitize_label(label: &str) -> String {
   const MAX_LABEL_VALUE_LEN: usize = 200;
-  let label = label.trim();
+  let trimmed = label.trim();
 
-  if label.len() > MAX_LABEL_VALUE_LEN || label.is_empty() {
+  if trimmed.len() > MAX_LABEL_VALUE_LEN || trimmed.is_empty() {
     return "other".to_owned();
   }
 
-  let valid = label.chars().all(|ch| !ch.is_control() && ch != '\u{7f}');
+  let valid = trimmed.chars().all(|ch| !ch.is_control() && ch != '\u{7f}');
 
   if valid {
-    label.to_owned()
+    trimmed.to_owned()
   } else {
     "other".to_owned()
   }
@@ -544,6 +613,8 @@ pub fn sanitize_label(label: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+  use anyhow::Result;
+
   use super::*;
   use crate::config::Config;
 
@@ -559,16 +630,19 @@ mod tests {
   }
 
   #[test]
-  fn records_metrics() {
+  #[expect(
+    clippy::panic_in_result_fn,
+    reason = "test assertions must panic to fail the test"
+  )]
+  fn records_metrics() -> Result<()> {
     let mut config = Config::default();
     config.site.domains = vec!["example.com".to_owned()];
     config.site.collect.acquisition = true;
     config.site.collect.browser = true;
     config.site.collect.os = true;
     config.site.collect.screen = true;
-    config.site.collect.properties = true;
-    config.validate().unwrap();
-    let metrics = Metrics::new(&config, &BuildInfo::current()).unwrap();
+    config.validate()?;
+    let metrics = Metrics::new(&config, &BuildInfo::current())?;
 
     let labels = DimensionLabels {
       path: "/".to_owned(),
@@ -590,7 +664,7 @@ mod tests {
     metrics.record_scroll_depth(&labels, 75);
     metrics.record_custom_property("signup", "tier", "paid");
 
-    let body = metrics.encode().unwrap();
+    let body = metrics.encode()?;
     assert!(body.contains("web_pageviews_total"));
     assert!(body.contains("web_events_total"));
     assert!(body.contains("web_sessions_total"));
@@ -600,5 +674,6 @@ mod tests {
     assert!(body.contains("event=\"signup\""));
     assert!(body.contains("depth=\"75\""));
     assert!(body.contains("key=\"tier\",value=\"paid\""));
+    Ok(())
   }
 }

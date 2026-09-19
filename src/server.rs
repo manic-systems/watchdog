@@ -1,15 +1,19 @@
 use std::net::SocketAddr;
 
-use anyhow::Context;
+use anyhow::Context as _;
 use axum::{Extension, Router, extract::ConnectInfo, serve::Listener};
 use hyper::server::conn::http1::Builder;
 use hyper_util::{
   rt::{TokioIo, TokioTimer},
   service::TowerToHyperService,
 };
+#[cfg(unix)] use tokio::signal::unix::{SignalKind, signal};
 use tokio::{
   net::{TcpListener, TcpStream},
+  signal::ctrl_c,
+  spawn,
   task::{JoinHandle, JoinSet},
+  time::{interval, timeout},
 };
 use tokio_io_timeout::TimeoutStream;
 use tokio_util::sync::CancellationToken;
@@ -28,6 +32,12 @@ use crate::{
 };
 
 /// Runs the HTTP server until a shutdown signal is received.
+///
+/// # Errors
+///
+/// Returns an error when the listen address is invalid, the socket cannot be
+/// bound, or persisted visitor state cannot be saved.
+#[inline]
 pub async fn run(config: Config, build_info: BuildInfo) -> anyhow::Result<()> {
   info!(domains = ?config.site.domains, "loaded configuration");
 
@@ -58,7 +68,7 @@ pub async fn run(config: Config, build_info: BuildInfo) -> anyhow::Result<()> {
 
   loop {
     tokio::select! {
-      _ = &mut exit_signal => break,
+      () = &mut exit_signal => break,
       (stream, remote_addr) = Listener::accept(&mut listener) => {
         connections.spawn(serve_connection(stream, remote_addr, app.clone(), shutdown.clone()));
       }
@@ -81,12 +91,12 @@ pub async fn run(config: Config, build_info: BuildInfo) -> anyhow::Result<()> {
     }
   };
 
-  if tokio::time::timeout(SHUTDOWN_TIMEOUT, drain).await.is_err() {
+  if timeout(SHUTDOWN_TIMEOUT, drain).await.is_err() {
     warn!("HTTP connections did not stop before timeout");
     connections.shutdown().await;
   }
 
-  match tokio::time::timeout(SHUTDOWN_TIMEOUT, &mut uniques_task).await {
+  match timeout(SHUTDOWN_TIMEOUT, &mut uniques_task).await {
     Ok(Ok(())) => {},
     Ok(Err(err)) => warn!(error = %err, "unique visitor gauge task failed"),
     Err(err) => {
@@ -104,6 +114,7 @@ pub async fn run(config: Config, build_info: BuildInfo) -> anyhow::Result<()> {
   Ok(())
 }
 
+/// Serves one accepted TCP connection with read and write timeouts.
 async fn serve_connection(
   stream: TcpStream,
   remote_addr: SocketAddr,
@@ -123,7 +134,7 @@ async fn serve_connection(
 
   let result = tokio::select! {
     result = &mut connection => result,
-    _ = shutdown.cancelled() => {
+    () = shutdown.cancelled() => {
       connection.as_mut().graceful_shutdown();
       connection.await
     }
@@ -134,43 +145,43 @@ async fn serve_connection(
   }
 }
 
+/// Spawns the task refreshing the unique visitor gauge on a fixed interval.
 fn spawn_unique_gauge_updater(
   state: AppState,
   shutdown: CancellationToken,
 ) -> JoinHandle<()> {
-  tokio::spawn(async move {
-    let mut interval = tokio::time::interval(UNIQUES_UPDATE_PERIOD);
+  spawn(async move {
+    let mut timer = interval(UNIQUES_UPDATE_PERIOD);
     loop {
       tokio::select! {
-          _ = interval.tick() => state.metrics().update_unique_gauge(),
-          _ = shutdown.cancelled() => break,
+          _ = timer.tick() => state.metrics().update_unique_gauge(),
+          () = shutdown.cancelled() => break,
       }
     }
   })
 }
 
+/// Waits for Ctrl-C or SIGTERM, then releases the shutdown token.
 async fn shutdown_signal(shutdown: CancellationToken) {
   #[cfg(unix)]
   {
-    match tokio::signal::unix::signal(
-      tokio::signal::unix::SignalKind::terminate(),
-    ) {
+    match signal(SignalKind::terminate()) {
       Ok(mut terminate) => {
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
+            _ = ctrl_c() => {},
             _ = terminate.recv() => {},
         }
       },
       Err(err) => {
         warn!(error = %err, "could not install SIGTERM handler; waiting for Ctrl-C");
-        let _ = tokio::signal::ctrl_c().await;
+        let _result = ctrl_c().await;
       },
     }
   }
 
   #[cfg(not(unix))]
   {
-    let _ = tokio::signal::ctrl_c().await;
+    let _result = ctrl_c().await;
   }
 
   shutdown.cancel();

@@ -1,9 +1,10 @@
 use std::{env::args_os, path::PathBuf, process::exit};
 
-use anyhow::Context;
+use anyhow::Context as _;
 use pound::Parse;
 use watchdog::{BuildInfo, config, server};
 
+/// Command-line interface for the Watchdog server.
 #[derive(Debug, Parse)]
 struct Cli {
   /// Path to the TOML configuration file.
@@ -35,9 +36,14 @@ async fn main() -> anyhow::Result<()> {
   let arguments = args_os()
     .skip(1)
     .map(|argument| {
+      #[expect(
+        clippy::print_stderr,
+        reason = "CLI must report invalid arguments before logging exists"
+      )]
       argument.into_string().unwrap_or_else(|invalid| {
         eprintln!(
-          "command-line arguments must be valid UTF-8, got {invalid:?}"
+          "command-line arguments must be valid UTF-8, got {}",
+          invalid.display()
         );
         exit(2);
       })

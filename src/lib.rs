@@ -3,6 +3,7 @@
 
 pub mod app;
 pub mod config;
+/// Shared counter family used by the metrics pipeline.
 mod counters;
 pub mod event;
 pub mod limits;
@@ -25,6 +26,8 @@ pub struct BuildInfo {
 
 impl BuildInfo {
   /// Returns build metadata embedded at compile time.
+  #[inline]
+  #[must_use]
   pub fn current() -> Self {
     Self {
       version:    env!("CARGO_PKG_VERSION").to_owned(),

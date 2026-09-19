@@ -3,7 +3,7 @@ use std::{
   net::{IpAddr, SocketAddr},
   num::NonZeroU32,
   path::Path,
-  str::FromStr,
+  str::FromStr as _,
   sync::Arc,
   time::Duration,
 };
@@ -19,7 +19,7 @@ use axum::{
 };
 use data_encoding::{BASE64, HEXLOWER};
 use ipnet::IpNet;
-use subtle::ConstantTimeEq;
+use subtle::ConstantTimeEq as _;
 use thiserror::Error;
 use tower_http::{
   cors::{Any, CorsLayer},
@@ -30,14 +30,16 @@ use url::{Url, form_urlencoded};
 
 use crate::{
   BuildInfo,
-  config::{Config, CorsConfig, ReferrerMode},
+  config::{Config, CorsConfig, DeviceBreakpoints, ReferrerMode},
   event::Event,
   limits::{HTTP_READ_TIMEOUT, MAX_EVENT_SIZE, MAX_METRICS_RESPONSE_SIZE},
   metrics::{DimensionLabels, Metrics, sanitize_label},
   normalize::{PathNormalizer, extract_referrer_domain, extract_referrer_url},
   ratelimit::IpRateLimiter,
   registry::BoundedRegistry,
+  uniques::UniqueStateError,
 };
+
 /// Errors returned while constructing application state or routes.
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -48,35 +50,62 @@ pub enum AppError {
   #[error("invalid CORS origin {value}: {source}")]
   CorsOrigin {
     value:  String,
-    source: axum::http::header::InvalidHeaderValue,
+    source: header::InvalidHeaderValue,
   },
 }
 
 /// Shared application state used by HTTP handlers.
 #[derive(Clone)]
 pub struct AppState {
+  /// Shared interior state behind an atomic reference count.
   inner: Arc<AppStateInner>,
 }
 
+/// Interior state shared across request handlers.
 struct AppStateInner {
+  /// Validated runtime configuration.
   config:                  Config,
+  /// Lowercased site domains allowed to submit events.
   allowed_domains:         HashSet<String>,
+  /// Sanitized custom event names allowed for ingestion.
   allowed_events:          HashSet<String>,
+  /// Networks allowed to set forwarding headers.
   trusted_proxies:         Vec<IpNet>,
+  /// Optional per-IP limiter for event ingestion.
   ingestion_limiter:       Option<Arc<IpRateLimiter>>,
+  /// Optional per-IP limiter for metrics scrapes.
   metrics_limiter:         Option<Arc<IpRateLimiter>>,
+  /// Normalizer applied to incoming event paths.
   path_normalizer:         PathNormalizer,
+  /// Bounded registry of seen normalized paths.
   path_registry:           BoundedRegistry,
+  /// Bounded registry of seen referrer labels.
   referrer_registry:       BoundedRegistry,
+  /// Bounded registry of seen custom event names.
   custom_event_registry:   BoundedRegistry,
+  /// Bounded registry of seen dimension values.
   dimension_registry:      BoundedRegistry,
+  /// Bounded registry of seen property keys.
   property_key_registry:   BoundedRegistry,
+  /// Bounded registry of seen property values.
   property_value_registry: BoundedRegistry,
+  /// Shared Prometheus metrics registry.
   metrics:                 Arc<Metrics>,
 }
 
 impl AppState {
   /// Builds application state from validated configuration and build metadata.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error when trusted proxies are invalid or metrics fail to
+  /// register.
+  #[inline]
+  #[expect(
+    clippy::needless_pass_by_value,
+    reason = "by-value keeps the server call site ergonomic; only borrowed by \
+              metrics"
+  )]
   pub fn new(config: Config, build_info: BuildInfo) -> Result<Self, AppError> {
     let allowed_domains = config.site.domains.iter().cloned().collect();
     let allowed_events = config
@@ -118,24 +147,33 @@ impl AppState {
   }
 
   /// Returns the runtime configuration backing this state.
+  #[inline]
+  #[must_use]
   pub fn config(&self) -> &Config {
     &self.inner.config
   }
 
   /// Returns the shared metrics registry.
+  #[inline]
+  #[must_use]
   pub fn metrics(&self) -> Arc<Metrics> {
-    self.inner.metrics.clone()
+    Arc::clone(&self.inner.metrics)
   }
 
   /// Returns the path used for persisted unique visitor state.
+  #[inline]
+  #[must_use]
   pub fn state_path(&self) -> &Path {
     Path::new(&self.inner.config.server.state_path)
   }
 
   /// Restores persisted unique visitor state when unique tracking is enabled.
-  pub async fn load_state(
-    &self,
-  ) -> Result<(), crate::uniques::UniqueStateError> {
+  ///
+  /// # Errors
+  ///
+  /// Returns an error when stored estimator state cannot be read or decoded.
+  #[inline]
+  pub async fn load_state(&self) -> Result<(), UniqueStateError> {
     if let Some(uniques) = self.inner.metrics.uniques() {
       uniques.load(self.state_path()).await?;
     }
@@ -143,15 +181,19 @@ impl AppState {
   }
 
   /// Persists unique visitor state when unique tracking is enabled.
-  pub async fn save_state(
-    &self,
-  ) -> Result<(), crate::uniques::UniqueStateError> {
+  ///
+  /// # Errors
+  ///
+  /// Returns an error when estimator state cannot be encoded or written.
+  #[inline]
+  pub async fn save_state(&self) -> Result<(), UniqueStateError> {
     if let Some(uniques) = self.inner.metrics.uniques() {
       uniques.save(self.state_path()).await?;
     }
     Ok(())
   }
 
+  /// Resolves the client address from forwarding headers when trusted.
   fn client_ip(&self, headers: &HeaderMap, remote_ip: IpAddr) -> IpAddr {
     if self.inner.trusted_proxies.is_empty() || !self.is_trusted_ip(remote_ip) {
       return remote_ip;
@@ -161,27 +203,28 @@ impl AppState {
       .get("x-forwarded-for")
       .and_then(|value| value.to_str().ok())
     {
-      for ip in header.split(',').rev().map(str::trim) {
-        if let Ok(ip) = ip.parse::<IpAddr>()
-          && !self.is_trusted_ip(ip)
+      for entry in header.split(',').rev().map(str::trim) {
+        if let Ok(candidate) = entry.parse::<IpAddr>()
+          && !self.is_trusted_ip(candidate)
         {
-          return ip;
+          return candidate;
         }
       }
     }
 
-    if let Some(ip) = headers
+    if let Some(forwarded) = headers
       .get("x-real-ip")
       .and_then(|value| value.to_str().ok())
       .and_then(|value| value.parse::<IpAddr>().ok())
-      && !self.is_trusted_ip(ip)
+      && !self.is_trusted_ip(forwarded)
     {
-      return ip;
+      return forwarded;
     }
 
     remote_ip
   }
 
+  /// Reports whether an address belongs to a configured trusted proxy.
   fn is_trusted_ip(&self, ip: IpAddr) -> bool {
     self
       .inner
@@ -192,6 +235,10 @@ impl AppState {
 }
 
 /// Builds the Axum router for ingestion, metrics, health, and embedded assets.
+/// # Errors
+///
+/// Returns an error when the CORS layer holds an invalid origin value.
+#[inline]
 pub fn router(state: AppState) -> Result<Router, AppError> {
   let ingestion_path = state.config().server.ingestion_path.clone();
   let metrics_path = state.config().server.metrics_path.clone();
@@ -220,10 +267,12 @@ pub fn router(state: AppState) -> Result<Router, AppError> {
   )
 }
 
+/// Answers liveness probes with a fixed OK response.
 async fn health() -> impl IntoResponse {
   (StatusCode::OK, "OK")
 }
 
+/// Ingests one analytics event and records derived metrics.
 async fn ingest(
   State(state): State<AppState>,
   ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
@@ -234,16 +283,19 @@ async fn ingest(
   let remote_ip = remote_addr.ip();
   let client_ip = state.client_ip(&headers, remote_ip);
 
-  if let Some(limiter) = &state.inner.ingestion_limiter
+  if let Some(limiter) = state.inner.ingestion_limiter.as_deref()
     && !limiter.check(client_ip)
   {
-    return response_with_request_id(StatusCode::TOO_MANY_REQUESTS, request_id);
+    return response_with_request_id(
+      StatusCode::TOO_MANY_REQUESTS,
+      &request_id,
+    );
   }
 
-  if state.config().site.sampling < 1.0
+  if state.config().site.sampling < 1.0_f64
     && rand::random::<f64>() >= state.config().site.sampling
   {
-    return response_with_request_id(StatusCode::NO_CONTENT, request_id);
+    return response_with_request_id(StatusCode::NO_CONTENT, &request_id);
   }
 
   let event_domain = event.normalize_domain();
@@ -251,7 +303,7 @@ async fn ingest(
     .validate(|domain| state.inner.allowed_domains.contains(domain))
     .is_err()
   {
-    return response_with_request_id(StatusCode::BAD_REQUEST, request_id);
+    return response_with_request_id(StatusCode::BAD_REQUEST, &request_id);
   }
 
   let event_path = event.path();
@@ -271,7 +323,7 @@ async fn ingest(
     &event,
     &event_path,
     &event_domain,
-    normalized_path,
+    &normalized_path,
     user_agent,
   );
   let event_name = event.event_name();
@@ -286,8 +338,8 @@ async fn ingest(
 
   if is_pageview {
     record_pageview(&state, &labels);
-  } else if let Some(event_label) = event_label.as_deref() {
-    record_event(&state, event_label, &labels);
+  } else if let Some(admitted_label) = event_label.as_deref() {
+    record_event(&state, admitted_label, &labels);
   }
 
   record_engagement(&state, &event, &labels);
@@ -301,9 +353,10 @@ async fn ingest(
     &event,
   );
 
-  response_with_request_id(StatusCode::NO_CONTENT, request_id)
+  response_with_request_id(StatusCode::NO_CONTENT, &request_id)
 }
 
+/// Admits a normalized path or collapses it to other when the registry is full.
 fn admit_path(state: &AppState, event_path: &str) -> String {
   let normalized = state.inner.path_normalizer.normalize(event_path);
   if state.inner.path_registry.add(&normalized) {
@@ -313,6 +366,7 @@ fn admit_path(state: &AppState, event_path: &str) -> String {
   "other".to_owned()
 }
 
+/// Records a pageview when pageview collection is enabled.
 fn record_pageview(state: &AppState, labels: &DimensionLabels) {
   if !state.config().site.collect.pageviews {
     return;
@@ -321,11 +375,13 @@ fn record_pageview(state: &AppState, labels: &DimensionLabels) {
   state.inner.metrics.record_pageview(labels);
 }
 
+/// Records a custom event in both the event and custom event metrics.
 fn record_event(state: &AppState, event_name: &str, labels: &DimensionLabels) {
   state.inner.metrics.record_custom_event(event_name);
   state.inner.metrics.record_event(event_name, labels);
 }
 
+/// Records engagement signals attached to an event.
 fn record_engagement(
   state: &AppState,
   event: &Event,
@@ -349,6 +405,7 @@ fn record_engagement(
   }
 }
 
+/// Records custom properties bounded by the property registries.
 fn record_properties(
   state: &AppState,
   event_name: Option<&str>,
@@ -358,13 +415,13 @@ fn record_properties(
     return;
   }
 
-  let Some(event_name) = event_name else {
+  let Some(label) = event_name else {
     return;
   };
 
-  for (key, value) in event.properties() {
-    let key = sanitize_label(&key);
-    let value = sanitize_label(&value);
+  for (raw_key, raw_value) in event.properties() {
+    let key = sanitize_label(&raw_key);
+    let sanitized_value = sanitize_label(&raw_value);
     if !state.inner.property_key_registry.add(&key) {
       state
         .inner
@@ -373,29 +430,31 @@ fn record_properties(
       continue;
     }
 
-    let registry_key = format!("{}:{key}{value}", key.len());
-    let value = if state.inner.property_value_registry.add(&registry_key) {
-      value
-    } else {
-      state
-        .inner
-        .metrics
-        .record_dimension_overflow("property_value");
-      "other".to_owned()
-    };
+    let registry_key = format!("{}:{key}{sanitized_value}", key.len());
+    let admitted_value =
+      if state.inner.property_value_registry.add(&registry_key) {
+        sanitized_value
+      } else {
+        state
+          .inner
+          .metrics
+          .record_dimension_overflow("property_value");
+        "other".to_owned()
+      };
     state
       .inner
       .metrics
-      .record_custom_property(event_name, &key, &value);
+      .record_custom_property(label, &key, &admitted_value);
   }
 }
 
+/// Builds the dimension labels recorded for one event.
 fn metric_labels(
   state: &AppState,
   event: &Event,
   event_path: &str,
   event_domain: &str,
-  normalized_path: String,
+  normalized_path: &str,
   user_agent: &str,
 ) -> DimensionLabels {
   let collect = &state.config().site.collect;
@@ -409,7 +468,7 @@ fn metric_labels(
   });
 
   DimensionLabels {
-    path:            normalized_path,
+    path:            normalized_path.to_owned(),
     country:         collect.country.then(|| "unknown".to_owned()),
     device:          collect.device.then(|| {
       classify_device(
@@ -481,6 +540,7 @@ fn metric_labels(
   }
 }
 
+/// Resolves the referrer label or drops referrers when disabled.
 fn referrer_label(
   state: &AppState,
   referrer: &str,
@@ -492,58 +552,68 @@ fn referrer_label(
     ReferrerMode::Url => extract_referrer_url(referrer, event_domain),
   }
   .unwrap_or_else(|| "other".to_owned());
-  let label = sanitize_label(&label);
+  let admitted = sanitize_label(&label);
 
-  if matches!(label.as_str(), "direct" | "internal")
-    || state.inner.referrer_registry.add(&label)
+  if matches!(admitted.as_str(), "direct" | "internal")
+    || state.inner.referrer_registry.add(&admitted)
   {
-    Some(label)
+    Some(admitted)
   } else {
     state.inner.metrics.record_referrer_overflow();
     Some("other".to_owned())
   }
 }
 
+/// Bounds a dimension value against the shared registry with a fallback.
 fn bounded_dimension(
   state: &AppState,
   dimension: &'static str,
   value: Option<String>,
   fallback: &'static str,
 ) -> String {
-  let value = value
-    .and_then(|value| {
-      let value = value.trim();
-      (!value.is_empty()).then(|| sanitize_label(value))
+  let admitted = value
+    .and_then(|raw| {
+      let trimmed = raw.trim();
+      (!trimmed.is_empty()).then(|| sanitize_label(trimmed))
     })
     .unwrap_or_else(|| fallback.to_owned());
 
   if matches!(
-    value.as_str(),
+    admitted.as_str(),
     "direct" | "internal" | "none" | "unknown" | "other"
   ) {
-    return value;
+    return admitted;
   }
 
-  let registry_key = format!("{dimension}={value}");
+  let registry_key = format!("{dimension}={admitted}");
   if state.inner.dimension_registry.add(&registry_key) {
-    value
+    admitted
   } else {
     state.inner.metrics.record_dimension_overflow(dimension);
     "other".to_owned()
   }
 }
 
+/// Marketing attribution labels parsed from URL and referrer.
 #[derive(Default)]
 struct AcquisitionLabels {
+  /// Referrer source domain when distinguishable from the event domain.
   referrer_source: Option<String>,
+  /// Campaign source parameter when present.
   utm_source:      Option<String>,
+  /// Campaign medium parameter when present.
   utm_medium:      Option<String>,
+  /// Campaign name parameter when present.
   utm_campaign:    Option<String>,
+  /// Campaign content parameter when present.
   utm_content:     Option<String>,
+  /// Campaign term parameter when present.
   utm_term:        Option<String>,
+  /// Click identifier parameter when present.
   click_id:        Option<String>,
 }
 
+/// Parses attribution labels from a URL query string.
 fn acquisition_labels(
   url: &str,
   referrer: &str,
@@ -555,19 +625,19 @@ fn acquisition_labels(
   };
 
   if let Some(query) = query_string(url) {
-    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
-      let value = value.trim();
-      if value.is_empty() {
+    for (param, raw) in form_urlencoded::parse(query.as_bytes()) {
+      let trimmed = raw.trim();
+      if trimmed.is_empty() {
         continue;
       }
 
-      match key.to_ascii_lowercase().as_ref() {
-        "utm_source" => set_once(&mut labels.utm_source, value),
-        "utm_medium" => set_once(&mut labels.utm_medium, value),
-        "utm_campaign" => set_once(&mut labels.utm_campaign, value),
-        "utm_content" => set_once(&mut labels.utm_content, value),
-        "utm_term" => set_once(&mut labels.utm_term, value),
-        key if is_click_id_param(key) => set_once(&mut labels.click_id, key),
+      match param.to_ascii_lowercase().as_ref() {
+        "utm_source" => set_once(&mut labels.utm_source, trimmed),
+        "utm_medium" => set_once(&mut labels.utm_medium, trimmed),
+        "utm_campaign" => set_once(&mut labels.utm_campaign, trimmed),
+        "utm_content" => set_once(&mut labels.utm_content, trimmed),
+        "utm_term" => set_once(&mut labels.utm_term, trimmed),
+        name if is_click_id_param(name) => set_once(&mut labels.click_id, name),
         _ => {},
       }
     }
@@ -576,6 +646,7 @@ fn acquisition_labels(
   labels
 }
 
+/// Extracts the raw query string from absolute and relative URLs.
 fn query_string(input: &str) -> Option<String> {
   if let Ok(url) = Url::parse(input) {
     return url.query().map(str::to_owned);
@@ -585,12 +656,14 @@ fn query_string(input: &str) -> Option<String> {
   path.split_once('?').map(|(_, query)| query.to_owned())
 }
 
+/// Assigns a label only when no earlier parameter supplied one.
 fn set_once(target: &mut Option<String>, value: &str) {
   if target.is_none() {
     *target = Some(value.trim().to_owned());
   }
 }
 
+/// Reports whether a parameter name carries a known click identifier.
 fn is_click_id_param(key: &str) -> bool {
   matches!(
     key,
@@ -605,31 +678,34 @@ fn is_click_id_param(key: &str) -> bool {
   )
 }
 
+/// Reports whether a name denotes an empty or pageview event.
 fn is_pageview_event(event_name: &str) -> bool {
-  let event_name = event_name.trim();
-  event_name.is_empty() || event_name.eq_ignore_ascii_case("pageview")
+  let candidate = event_name.trim();
+  candidate.is_empty() || candidate.eq_ignore_ascii_case("pageview")
 }
 
+/// Admits a custom event label or drops it when not allowlisted.
 fn bounded_event_label(state: &AppState, event_name: &str) -> Option<String> {
-  let event_name = sanitize_label(event_name.trim());
+  let admitted = sanitize_label(event_name.trim());
 
-  if !is_system_event(&event_name)
+  if !is_system_event(&admitted)
     && !state.inner.allowed_events.is_empty()
-    && !state.inner.allowed_events.contains(&event_name)
+    && !state.inner.allowed_events.contains(&admitted)
   {
     return None;
   }
 
-  if is_system_event(&event_name)
-    || state.inner.custom_event_registry.add(&event_name)
+  if is_system_event(&admitted)
+    || state.inner.custom_event_registry.add(&admitted)
   {
-    Some(event_name)
+    Some(admitted)
   } else {
     state.inner.metrics.record_event_overflow();
     Some("other".to_owned())
   }
 }
 
+/// Reports whether a name is emitted by Watchdog itself.
 fn is_system_event(event_name: &str) -> bool {
   matches!(
     event_name,
@@ -643,6 +719,7 @@ fn is_system_event(event_name: &str) -> bool {
   )
 }
 
+/// Serves the Prometheus metrics endpoint with optional auth and rate limits.
 async fn metrics(
   State(state): State<AppState>,
   ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
@@ -650,7 +727,7 @@ async fn metrics(
 ) -> Response {
   let remote_ip = remote_addr.ip();
   let client_ip = state.client_ip(&headers, remote_ip);
-  if let Some(limiter) = &state.inner.metrics_limiter
+  if let Some(limiter) = state.inner.metrics_limiter.as_deref()
     && !limiter.check(client_ip)
   {
     return StatusCode::TOO_MANY_REQUESTS.into_response();
@@ -664,11 +741,11 @@ async fn metrics(
     Ok(body) if body.len() <= MAX_METRICS_RESPONSE_SIZE => {
       ([(header::CONTENT_TYPE, prometheus::TEXT_FORMAT)], body).into_response()
     },
-    Ok(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    Ok(_) | Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
   }
 }
 
+/// Checks metrics credentials against the configured username and password.
 fn metrics_authorized(state: &AppState, headers: &HeaderMap) -> bool {
   let auth = &state.config().security.metrics_auth;
   if !auth.enabled {
@@ -698,18 +775,20 @@ fn metrics_authorized(state: &AppState, headers: &HeaderMap) -> bool {
   constant_time_equal(expected.as_bytes(), provided.as_bytes())
 }
 
+/// Compares credential bytes without leaking length or content via timing.
 fn constant_time_equal(expected: &[u8], provided: &[u8]) -> bool {
   let mismatch = expected.len().ct_eq(&provided.len());
   let max_len = expected.len().max(provided.len());
-  let mut diff = 0u8;
-  for index in 0..max_len {
-    let left = expected.get(index).copied().unwrap_or(0);
-    let right = provided.get(index).copied().unwrap_or(0);
+  let mut diff = 0_u8;
+  for index in 0_usize..max_len {
+    let left = expected.get(index).copied().unwrap_or(0_u8);
+    let right = provided.get(index).copied().unwrap_or(0_u8);
     diff |= left ^ right;
   }
-  bool::from(mismatch & diff.ct_eq(&0))
+  bool::from(mismatch & diff.ct_eq(&0_u8))
 }
 
+/// Builds a Basic-auth challenge for unauthorized metrics requests.
 fn unauthorized_metrics_response() -> Response {
   let mut response = StatusCode::UNAUTHORIZED.into_response();
   response.headers_mut().insert(
@@ -719,6 +798,7 @@ fn unauthorized_metrics_response() -> Response {
   response
 }
 
+/// Serves embedded web assets after validating the requested path.
 async fn static_asset(
   State(state): State<AppState>,
   AxumPath(path): AxumPath<String>,
@@ -743,30 +823,32 @@ async fn static_asset(
     .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
+/// Returns the inbound request ID or mints a random replacement.
 fn request_id(headers: &HeaderMap) -> String {
   headers
     .get("x-request-id")
     .and_then(|value| value.to_str().ok())
     .filter(|value| !value.is_empty())
-    .map(str::to_owned)
-    .unwrap_or_else(|| HEXLOWER.encode(&rand::random::<[u8; 16]>()))
+    .map_or_else(
+      || HEXLOWER.encode(&rand::random::<[u8; 16_usize]>()),
+      str::to_owned,
+    )
 }
 
-fn response_with_request_id(
-  status: StatusCode,
-  request_id: String,
-) -> Response {
+/// Attaches a request ID header to an outgoing response.
+fn response_with_request_id(status: StatusCode, request_id: &str) -> Response {
   let mut response = status.into_response();
-  if let Ok(value) = HeaderValue::from_str(&request_id) {
+  if let Ok(value) = HeaderValue::from_str(request_id) {
     response.headers_mut().insert("x-request-id", value);
   }
   response
 }
 
+/// Classifies a device from width breakpoints and user agent hints.
 fn classify_device(
   width: u16,
   user_agent: &str,
-  breakpoints: crate::config::DeviceBreakpoints,
+  breakpoints: DeviceBreakpoints,
 ) -> String {
   let ua = user_agent.to_ascii_lowercase();
 
@@ -786,7 +868,7 @@ fn classify_device(
     return "mobile".to_owned();
   }
 
-  if width > 0 {
+  if width > 0_u16 {
     if width < breakpoints.mobile {
       return "mobile".to_owned();
     }
@@ -803,11 +885,9 @@ fn classify_device(
   }
 }
 
-fn classify_screen(
-  width: u16,
-  breakpoints: crate::config::DeviceBreakpoints,
-) -> String {
-  if width == 0 {
+/// Classifies a screen bucket from width breakpoints.
+fn classify_screen(width: u16, breakpoints: DeviceBreakpoints) -> String {
+  if width == 0_u16 {
     return "unknown".to_owned();
   }
   if width < breakpoints.mobile {
@@ -816,12 +896,13 @@ fn classify_screen(
   if width < breakpoints.tablet {
     return "tablet".to_owned();
   }
-  if width >= 1440 {
+  if width >= 1_440_u16 {
     return "wide".to_owned();
   }
   "desktop".to_owned()
 }
 
+/// Classifies a browser family from a user agent string.
 fn classify_browser(user_agent: &str) -> String {
   let ua = user_agent.to_ascii_lowercase();
   if ua.is_empty() {
@@ -849,6 +930,7 @@ fn classify_browser(user_agent: &str) -> String {
   "other".to_owned()
 }
 
+/// Classifies an operating system family from a user agent string.
 fn classify_os(user_agent: &str) -> String {
   let ua = user_agent.to_ascii_lowercase();
   if ua.is_empty() {
@@ -872,11 +954,16 @@ fn classify_os(user_agent: &str) -> String {
   "other".to_owned()
 }
 
+/// Builds the CORS layer for event ingestion.
+///
+/// # Errors
+///
+/// Returns an error when an allowed origin is not a valid header value.
 fn cors_layer(config: &CorsConfig) -> Result<CorsLayer, AppError> {
   let layer = CorsLayer::new()
     .allow_methods([Method::POST, Method::OPTIONS])
     .allow_headers([header::CONTENT_TYPE])
-    .max_age(Duration::from_secs(86_400));
+    .max_age(Duration::from_hours(24_u64));
 
   if config.allowed_origins.iter().any(|origin| origin == "*") {
     Ok(layer.allow_origin(Any))
@@ -897,10 +984,16 @@ fn cors_layer(config: &CorsConfig) -> Result<CorsLayer, AppError> {
   }
 }
 
+/// Builds an optional per-minute IP rate limiter from a nonzero limit.
 fn rate_limiter(limit: u32) -> Option<Arc<IpRateLimiter>> {
-  NonZeroU32::new(limit).map(|limit| Arc::new(IpRateLimiter::per_minute(limit)))
+  NonZeroU32::new(limit).map(|count| Arc::new(IpRateLimiter::per_minute(count)))
 }
 
+/// Parses trusted proxy networks and single addresses into CIDR form.
+///
+/// # Errors
+///
+/// Returns an error when a value is neither a CIDR network nor an IP address.
 fn parse_trusted_proxies(values: &[String]) -> Result<Vec<IpNet>, AppError> {
   values
     .iter()
@@ -915,7 +1008,7 @@ fn parse_trusted_proxies(values: &[String]) -> Result<Vec<IpNet>, AppError> {
           reason: err.to_string(),
         }
       })?;
-      let prefix_len = if ip.is_ipv4() { 32 } else { 128 };
+      let prefix_len = if ip.is_ipv4() { 32_u8 } else { 128_u8 };
       IpNet::new(ip, prefix_len).map_err(|err| {
         AppError::TrustedProxy {
           value:  value.clone(),
@@ -926,6 +1019,11 @@ fn parse_trusted_proxies(values: &[String]) -> Result<Vec<IpNet>, AppError> {
     .collect()
 }
 
+/// Rejects asset paths that escape, hide, or expose sensitive files.
+///
+/// # Errors
+///
+/// Returns the blocking reason when a path must not be served.
 fn validate_asset_path(path: &str) -> Result<(), &'static str> {
   if path.is_empty() || path.ends_with('/') {
     return Err("directory_listing");
@@ -943,7 +1041,9 @@ fn validate_asset_path(path: &str) -> Result<(), &'static str> {
     let lower = segment.to_ascii_lowercase();
     if lower.contains(".env")
       || lower.contains("config")
-      || lower.ends_with(".bak")
+      || Path::new(&lower)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("bak"))
       || lower.ends_with('~')
     {
       return Err("sensitive_file");
@@ -953,6 +1053,8 @@ fn validate_asset_path(path: &str) -> Result<(), &'static str> {
   match Path::new(path)
     .extension()
     .and_then(|extension| extension.to_str())
+    .map(str::to_ascii_lowercase)
+    .as_deref()
   {
     Some("js" | "html" | "css") => Ok(()),
     _ => Err("invalid_extension"),
@@ -961,11 +1063,10 @@ fn validate_asset_path(path: &str) -> Result<(), &'static str> {
 
 #[cfg(test)]
 mod tests {
+  use anyhow::Result;
+
   use super::*;
-  use crate::{
-    BuildInfo,
-    config::{Config, DeviceBreakpoints},
-  };
+  use crate::config::Config;
 
   #[test]
   fn classifies_devices() {
@@ -976,10 +1077,10 @@ mod tests {
       "mobile"
     );
     assert_eq!(classify_device(900, "", breakpoints), "tablet");
-    assert_eq!(classify_device(1440, "", breakpoints), "desktop");
+    assert_eq!(classify_device(1_440, "", breakpoints), "desktop");
     assert_eq!(classify_device(0, "", breakpoints), "unknown");
     assert_eq!(classify_screen(390, breakpoints), "mobile");
-    assert_eq!(classify_screen(1440, breakpoints), "wide");
+    assert_eq!(classify_screen(1_440, breakpoints), "wide");
     assert_eq!(classify_browser("Mozilla/5.0 Firefox/120.0"), "firefox");
     assert_eq!(classify_os("Mozilla/5.0 (X11; Linux x86_64)"), "linux");
   }
@@ -1003,21 +1104,31 @@ mod tests {
   }
 
   #[test]
-  fn bounded_dimension_uses_fallback_for_blank_values() {
+  #[expect(
+    clippy::panic_in_result_fn,
+    reason = "asserts define the expected fallback contract for blank \
+              dimensions"
+  )]
+  fn bounded_dimension_uses_fallback_for_blank_values() -> Result<()> {
     let mut config = Config::default();
     config.site.domains = vec!["example.com".to_owned()];
-    config.validate().unwrap();
-    let state = AppState::new(config, BuildInfo::current()).unwrap();
+    config.validate()?;
+    let state = AppState::new(config, BuildInfo::current())?;
 
     assert_eq!(
       bounded_dimension(&state, "utm_source", Some("  ".to_owned()), "none"),
       "none"
     );
+    Ok(())
   }
 
   #[test]
+  #[expect(
+    clippy::unwrap_used,
+    reason = "static asset fixture must parse, failure means the test is wrong"
+  )]
   fn validates_embedded_asset_paths() {
-    assert!(validate_asset_path("beacon.js").is_ok());
+    validate_asset_path("beacon.js").unwrap();
     assert_eq!(validate_asset_path("../secret.js"), Err("invalid_path"));
     assert_eq!(validate_asset_path(".env"), Err("dotfile"));
     assert_eq!(validate_asset_path("config.js"), Err("sensitive_file"));
@@ -1025,15 +1136,21 @@ mod tests {
   }
 
   #[test]
-  fn collapses_path_to_other_when_registry_full() {
+  #[expect(
+    clippy::panic_in_result_fn,
+    reason = "asserts define the expected overflow contract for a full path \
+              registry"
+  )]
+  fn collapses_path_to_other_when_registry_full() -> Result<()> {
     let mut config = Config::default();
     config.site.domains = vec!["example.com".to_owned()];
     config.limits.max_paths = 1;
-    config.validate().unwrap();
-    let state = AppState::new(config, BuildInfo::current()).unwrap();
+    config.validate()?;
+    let state = AppState::new(config, BuildInfo::current())?;
 
     assert_eq!(admit_path(&state, "/first"), "/first");
     assert_eq!(admit_path(&state, "/second"), "other");
+    Ok(())
   }
 
   #[test]

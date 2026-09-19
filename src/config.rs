@@ -1,7 +1,7 @@
 use std::{
-  net::SocketAddr,
+  net::{IpAddr, SocketAddr},
   path::{Path, PathBuf},
-  str::FromStr,
+  str::FromStr as _,
 };
 
 use figment::{
@@ -84,6 +84,7 @@ pub struct SiteConfig {
 }
 
 impl Default for SiteConfig {
+  #[inline]
   fn default() -> Self {
     Self {
       domains:       Vec::new(),
@@ -106,7 +107,9 @@ pub enum SaltRotation {
 
 impl SaltRotation {
   /// Returns the TOML representation for this rotation period.
-  pub fn as_str(self) -> &'static str {
+  #[must_use]
+  #[inline]
+  pub const fn as_str(self) -> &'static str {
     match self {
       Self::Daily => "daily",
       Self::Hourly => "hourly",
@@ -117,6 +120,11 @@ impl SaltRotation {
 /// Feature flags for dimensions and event types collected into metrics.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[expect(
+  clippy::struct_excessive_bools,
+  reason = "bools map one to one to TOML keys so splitting would change \
+            config format"
+)]
 pub struct CollectConfig {
   pub pageviews:   bool,
   pub sessions:    bool,
@@ -133,6 +141,7 @@ pub struct CollectConfig {
 }
 
 impl Default for CollectConfig {
+  #[inline]
   fn default() -> Self {
     Self {
       pageviews:   true,
@@ -164,6 +173,11 @@ pub enum ReferrerMode {
 /// Path normalization options applied before recording metrics.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[expect(
+  clippy::struct_excessive_bools,
+  reason = "bools map one to one to TOML keys so splitting would change \
+            config format"
+)]
 pub struct PathConfig {
   pub strip_query:               bool,
   pub strip_fragment:            bool,
@@ -173,6 +187,7 @@ pub struct PathConfig {
 }
 
 impl Default for PathConfig {
+  #[inline]
   fn default() -> Self {
     Self {
       strip_query:               true,
@@ -200,6 +215,7 @@ pub struct LimitsConfig {
 }
 
 impl Default for LimitsConfig {
+  #[inline]
   fn default() -> Self {
     Self {
       max_paths:              10_000,
@@ -224,6 +240,7 @@ pub struct DeviceBreakpoints {
 }
 
 impl Default for DeviceBreakpoints {
+  #[inline]
   fn default() -> Self {
     Self {
       mobile: 768,
@@ -269,6 +286,7 @@ pub struct ServerConfig {
 }
 
 impl Default for ServerConfig {
+  #[inline]
   fn default() -> Self {
     Self {
       listen_addr:    "127.0.0.1:8080".to_owned(),
@@ -287,6 +305,7 @@ pub struct Overrides {
   pub ingestion_path: Option<String>,
 }
 
+/// TOML file provider for figment.
 struct Toml;
 
 impl Format for Toml {
@@ -294,28 +313,34 @@ impl Format for Toml {
 
   const NAME: &'static str = "TOML";
 
-  fn from_str<Value: DeserializeOwned>(
-    input: &str,
-  ) -> Result<Value, Self::Error> {
-    toml::from_str(input)
+  fn from_str<T>(string: &str) -> Result<T, Self::Error>
+  where
+    T: DeserializeOwned,
+  {
+    toml::from_str(string)
   }
 }
 
 /// Loads configuration from defaults, an optional TOML file, environment, and
 /// explicit command-line overrides.
+///
+/// # Errors
+///
+/// Returns an error when the file is missing or holds invalid values.
+#[inline]
 pub fn load(
   path: Option<&Path>,
   overrides: Overrides,
 ) -> Result<Config, ConfigError> {
   let mut figment = Figment::new();
 
-  if let Some(path) = path {
-    if !path.exists() {
-      return Err(ConfigError::ConfigFileMissing(path.to_path_buf()));
+  if let Some(explicit_path) = path {
+    if !explicit_path.exists() {
+      return Err(ConfigError::ConfigFileMissing(explicit_path.to_path_buf()));
     }
-    figment = figment.merge(Toml::file(path));
-  } else if let Some(path) = default_config_path() {
-    figment = figment.merge(Toml::file(path));
+    figment = figment.merge(Toml::file(explicit_path));
+  } else if let Some(fallback_path) = default_config_path() {
+    figment = figment.merge(Toml::file(fallback_path));
   }
 
   let mut config: Config = figment
@@ -337,6 +362,7 @@ pub fn load(
   Ok(config)
 }
 
+/// Locates the default config file when no path is given.
 fn default_config_path() -> Option<PathBuf> {
   ["config.toml", "/etc/watchdog/config.toml"]
     .into_iter()
@@ -346,6 +372,11 @@ fn default_config_path() -> Option<PathBuf> {
 
 impl Config {
   /// Normalizes and validates the configuration in place.
+  ///
+  /// # Errors
+  ///
+  /// Returns an error when required fields are missing or hold invalid values.
+  #[inline]
   pub fn validate(&mut self) -> Result<(), ConfigError> {
     self.site.domains = self
       .site
@@ -367,7 +398,7 @@ impl Config {
       .filter(|event| !event.is_empty())
       .collect();
 
-    if !(0.0..=1.0).contains(&self.site.sampling) {
+    if !(0.0_f64..=1.0_f64).contains(&self.site.sampling) {
       return Err(ConfigError::InvalidSampling);
     }
 
@@ -431,9 +462,7 @@ impl Config {
     }
 
     for proxy in &self.security.trusted_proxies {
-      if IpNet::from_str(proxy).is_ok()
-        || proxy.parse::<std::net::IpAddr>().is_ok()
-      {
+      if IpNet::from_str(proxy).is_ok() || proxy.parse::<IpAddr>().is_ok() {
         continue;
       }
       return Err(ConfigError::InvalidTrustedProxy(proxy.clone()));
@@ -454,6 +483,8 @@ impl Config {
   }
 }
 
+/// Checks that an endpoint path starts with a slash and holds supported
+/// characters.
 fn validate_endpoint_path(
   field: &'static str,
   path: &str,
@@ -470,6 +501,7 @@ fn validate_endpoint_path(
   Ok(())
 }
 
+/// Checks that an endpoint path avoids reserved routes.
 fn validate_reserved_endpoint_path(
   field: &'static str,
   path: &str,
@@ -486,13 +518,22 @@ fn validate_reserved_endpoint_path(
 
 #[cfg(test)]
 mod tests {
+  use std::fs;
+
+  use anyhow::Result;
+
   use super::*;
 
   #[test]
-  fn applies_defaults_and_normalizes_domains() {
+  #[expect(
+    clippy::panic_in_result_fn,
+    reason = "assertions define the expected default and normalization \
+              contract"
+  )]
+  fn applies_defaults_and_normalizes_domains() -> Result<()> {
     let mut config = Config::default();
     config.site.domains = vec!["Example.COM.".to_owned()];
-    config.validate().unwrap();
+    config.validate()?;
 
     assert_eq!(config.site.domains, ["example.com"]);
     assert_eq!(config.server.metrics_path, "/metrics");
@@ -500,6 +541,7 @@ mod tests {
     assert!(config.site.collect.engagement);
     assert_eq!(config.limits.device_breakpoints.mobile, 768);
     assert_eq!(config.limits.max_dimension_values, 1_000);
+    Ok(())
   }
 
   #[test]
@@ -547,10 +589,14 @@ mod tests {
   }
 
   #[test]
-  fn loads_toml_config_file() {
-    let dir = tempfile::tempdir().unwrap();
+  #[expect(
+    clippy::panic_in_result_fn,
+    reason = "assertions define the expected validation contract"
+  )]
+  fn loads_toml_config_file() -> Result<()> {
+    let dir = tempfile::tempdir()?;
     let path = dir.path().join("config.toml");
-    std::fs::write(
+    fs::write(
       &path,
       r#"
                 [site]
@@ -559,12 +605,12 @@ mod tests {
                 [server]
                 listen_addr = "127.0.0.1:9090"
             "#,
-    )
-    .unwrap();
+    )?;
 
-    let config = load(Some(&path), Overrides::default()).unwrap();
+    let config = load(Some(&path), Overrides::default())?;
     assert_eq!(config.server.listen_addr, "127.0.0.1:9090");
     assert_eq!(config.limits.max_paths, 10_000);
+    Ok(())
   }
 
   #[test]
