@@ -12,7 +12,7 @@ anyhow                     = "1.0.104"
 axum                       = { version = "0.8.9", default-features = false, features = [ "http1", "json", "tokio", "tracing" ] }
 cardinality-estimator-safe = { version = "4.0.3", features = [ "with_serde" ] }
 data-encoding              = "2.11.1"
-figment                    = { version = "0.10.19", features = [ "env", "toml" ] }
+figment                    = { version = "0.10.19", features = [ "env" ] }
 hmac-sha256                = "1.1.14"
 hyper                      = { version = "1.10.1", features = [ "http1", "server" ] }
 hyper-util                 = { version = "0.1.20", features = [ "service", "tokio" ] }
@@ -29,6 +29,7 @@ thiserror                  = "2.0.20"
 tokio                      = { version = "1.53.1", features = [ "fs", "macros", "net", "rt-multi-thread", "signal", "time" ] }
 tokio-io-timeout           = "1.2.1"
 tokio-util                 = { version = "0.7.19", features = [ "rt" ] }
+toml                       = { version = "1.1.6", default-features = false, features = [ "parse", "serde", "std" ] }
 tower-http                 = { version = "0.7.1", features = [ "cors", "timeout", "trace" ] }
 tracing                    = { version = "0.1.44", default-features = false, features = [ "std" ] }
 tracing-subscriber         = { version = "0.3.23", features = [ "env-filter" ] }
