@@ -1,14 +1,28 @@
-# Binaries
-/watchdog
-/target/
+*
+!.envrc
+!.gitignore
+!.rustfmt.toml
+!.taplo.toml
+!Cargo.lock
+!Cargo.toml
+!LICENSE
+!README.md
+!config.example.toml
+!deny.toml
+!flake.lock
+!flake.nix
 
-# Nix
-/result*
-/.direnv
-
-# Config
-config.local.toml
-
-# Data
-*.mmdb
-data/
+!.github/
+!.github/**
+!contrib/
+!contrib/**
+!docs/
+!docs/**
+!nix/
+!nix/**
+!src/
+!src/**
+!testdata/
+!testdata/**
+!web/
+!web/**
