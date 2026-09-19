@@ -350,7 +350,11 @@ pub fn load(
   }
 
   let mut config: Config = figment
-    .merge(Env::prefixed("WATCHDOG_").split("__"))
+    .merge(
+      Env::prefixed("WATCHDOG_")
+        .ignore(&["commit", "build_date"])
+        .split("__"),
+    )
     .extract()
     .map_err(|err| ConfigError::Extract(Box::new(err)))?;
 
