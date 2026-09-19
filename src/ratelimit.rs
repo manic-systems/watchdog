@@ -14,20 +14,29 @@ use parking_lot::Mutex;
 /// protection is intentionally left to edge proxies.
 #[derive(Debug, Clone)]
 pub struct IpRateLimiter {
+  /// Shared per address windows behind one mutex.
   inner:  Arc<Mutex<IpWindows>>,
+  /// Allowed requests per window for every address.
   limit:  NonZeroU32,
+  /// Length of one fixed window.
   window: Duration,
 }
 
+/// Mutable per address windows plus the next prune time.
 #[derive(Debug)]
 struct IpWindows {
+  /// Live windows keyed by client address.
   entries:      HashMap<IpAddr, Window>,
+  /// Earliest time a full prune may run again.
   next_cleanup: Instant,
 }
 
+/// One fixed window counter.
 #[derive(Debug)]
 struct Window {
+  /// Requests seen in the current window.
   count: u32,
+  /// Time the current window started.
   start: Instant,
 }
 
@@ -36,10 +45,13 @@ const MAX_TRACKED_IPS: usize = 100_000;
 
 impl IpRateLimiter {
   /// Creates a limiter allowing `limit` requests per minute per IP.
+  #[inline]
+  #[must_use]
   pub fn per_minute(limit: NonZeroU32) -> Self {
-    Self::with_window(limit, Duration::from_secs(60))
+    Self::with_window(limit, Duration::from_mins(1))
   }
 
+  /// Builds a limiter with an explicit window.
   fn with_window(limit: NonZeroU32, window: Duration) -> Self {
     Self {
       inner: Arc::new(Mutex::new(IpWindows {
@@ -52,6 +64,8 @@ impl IpRateLimiter {
   }
 
   /// Returns true when a request from `ip` fits its current window.
+  #[must_use]
+  #[inline]
   pub fn check(&self, ip: IpAddr) -> bool {
     let mut inner = self.inner.lock();
     let now = Instant::now();
@@ -91,16 +105,21 @@ impl IpRateLimiter {
 
 #[cfg(test)]
 mod tests {
+  use std::thread::sleep;
+
   use super::*;
 
-  fn limit(value: u32) -> NonZeroU32 {
-    NonZeroU32::new(value).expect("test limit must be nonzero")
+  const fn limit(value: u32) -> NonZeroU32 {
+    match NonZeroU32::new(value) {
+      Some(limit) => limit,
+      None => NonZeroU32::MIN,
+    }
   }
 
   #[test]
   fn enforces_per_ip_quota() {
-    let limiter = IpRateLimiter::with_window(limit(2), Duration::from_secs(60));
-    let addr: IpAddr = "192.0.2.1".parse().unwrap();
+    let limiter = IpRateLimiter::with_window(limit(2), Duration::from_mins(1));
+    let addr: IpAddr = IpAddr::from([192_u8, 0_u8, 2_u8, 1_u8]);
 
     assert!(limiter.check(addr));
     assert!(limiter.check(addr));
@@ -109,10 +128,9 @@ mod tests {
 
   #[test]
   fn quotas_are_independent_per_ip() {
-    let limiter = IpRateLimiter::with_window(limit(1), Duration::from_secs(60));
-    let exhausted: IpAddr = "192.0.2.1".parse().unwrap();
-    let fresh: IpAddr = "192.0.2.2".parse().unwrap();
-
+    let limiter = IpRateLimiter::with_window(limit(1), Duration::from_mins(1));
+    let exhausted: IpAddr = IpAddr::from([192_u8, 0_u8, 2_u8, 1_u8]);
+    let fresh: IpAddr = IpAddr::from([192_u8, 0_u8, 2_u8, 2_u8]);
     assert!(limiter.check(exhausted));
     assert!(!limiter.check(exhausted));
     assert!(limiter.check(fresh));
@@ -122,28 +140,30 @@ mod tests {
   fn window_expiry_restores_quota() {
     let limiter =
       IpRateLimiter::with_window(limit(1), Duration::from_millis(20));
-    let addr: IpAddr = "192.0.2.1".parse().unwrap();
+    let addr: IpAddr = IpAddr::from([192_u8, 0_u8, 2_u8, 1_u8]);
 
     assert!(limiter.check(addr));
     assert!(!limiter.check(addr));
-    std::thread::sleep(Duration::from_millis(30));
+    sleep(Duration::from_millis(30));
     assert!(limiter.check(addr));
   }
 
   #[test]
   fn prunes_expired_entries_when_full() {
-    let limiter =
-      IpRateLimiter::with_window(limit(10), Duration::from_secs(60));
-    let stale = Instant::now() - Duration::from_secs(61);
+    let limiter = IpRateLimiter::with_window(limit(10), Duration::from_mins(1));
+    let stale = Instant::now()
+      .checked_sub(Duration::from_secs(61))
+      .unwrap_or_else(Instant::now);
+    let bound = u32::try_from(MAX_TRACKED_IPS).unwrap_or(u32::MAX);
     {
       let mut inner = limiter.inner.lock();
-      for index in 0..=MAX_TRACKED_IPS as u32 {
-        let addr = IpAddr::from([
-          10,
-          (index >> 16) as u8,
-          (index >> 8) as u8,
-          index as u8,
-        ]);
+      for index in 0..=bound {
+        #[expect(
+          clippy::little_endian_bytes,
+          reason = "test-only address packing, never persisted or hashed"
+        )]
+        let octets = index.to_le_bytes();
+        let addr = IpAddr::from([10_u8, octets[2], octets[1], octets[0]]);
         inner.entries.insert(addr, Window {
           count: 1,
           start: stale,
@@ -151,7 +171,7 @@ mod tests {
       }
     }
 
-    let fresh: IpAddr = "192.0.2.1".parse().unwrap();
+    let fresh: IpAddr = IpAddr::from([192_u8, 0_u8, 2_u8, 1_u8]);
     assert!(limiter.check(fresh));
     assert!(limiter.inner.lock().entries.len() < MAX_TRACKED_IPS);
   }

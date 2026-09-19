@@ -8,13 +8,18 @@ use parking_lot::RwLock;
 /// Thread-safe set that accepts only a bounded number of distinct values.
 #[derive(Debug)]
 pub struct BoundedRegistry {
+  /// Accepted values, guarded for shared access.
   entries:     RwLock<HashSet<String>>,
+  /// Maximum number of distinct values kept.
   max_entries: usize,
+  /// Count of values rejected after the registry filled.
   overflows:   AtomicUsize,
 }
 
 impl BoundedRegistry {
   /// Creates an empty registry with the given maximum cardinality.
+  #[inline]
+  #[must_use]
   pub fn new(max_entries: usize) -> Self {
     Self {
       entries: RwLock::new(HashSet::with_capacity(max_entries)),
@@ -24,6 +29,7 @@ impl BoundedRegistry {
   }
 
   /// Adds a value, returning `false` when the registry is already full.
+  #[inline]
   pub fn add(&self, value: &str) -> bool {
     if self.entries.read().contains(value) {
       return true;
@@ -44,16 +50,19 @@ impl BoundedRegistry {
   }
 
   /// Returns the number of distinct values accepted so far.
+  #[inline]
   pub fn count(&self) -> usize {
     self.entries.read().len()
   }
 
   /// Returns how many distinct values were rejected after the registry filled.
+  #[inline]
   pub fn overflow_count(&self) -> usize {
     self.overflows.load(Ordering::Relaxed)
   }
 
   /// Returns whether a value has already been accepted by the registry.
+  #[inline]
   pub fn contains(&self, value: &str) -> bool {
     self.entries.read().contains(value)
   }

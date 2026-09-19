@@ -7,13 +7,22 @@ use prometheus::{
   proto::{MetricFamily, MetricType},
 };
 
+/// Lazily-created family of counters sharing one descriptor.
+#[expect(
+  clippy::redundant_pub_crate,
+  reason = "sibling metrics module imports this family across module boundary"
+)]
 pub(crate) struct CounterFamily<Storage: Atomic> {
+  /// Base options cloned for each label combination.
   options:    Opts,
+  /// Descriptor shared by every counter in the family.
   descriptor: Desc,
+  /// Live counters keyed by their label values.
   counters:   Arc<RwLock<HashMap<Vec<String>, GenericCounter<Storage>>>>,
 }
 
 impl<Storage: Atomic> CounterFamily<Storage> {
+  /// Creates a counter family after validating the label names.
   pub(crate) fn new(options: Opts, names: &[&str]) -> prometheus::Result<Self> {
     let descriptor = Desc::new(
       options.fq_name(),
@@ -29,11 +38,16 @@ impl<Storage: Atomic> CounterFamily<Storage> {
     })
   }
 
+  /// Returns the counter for the given label values, creating it on first use.
   pub(crate) fn with_label_values(
     &self,
     values: Vec<String>,
   ) -> GenericCounter<Storage> {
-    assert_eq!(values.len(), self.descriptor.variable_labels.len());
+    assert_eq!(
+      values.len(),
+      self.descriptor.variable_labels.len(),
+      "label values must match label names",
+    );
 
     if let Some(counter) = self.counters.read().get(values.as_slice()) {
       return counter.clone();
@@ -55,6 +69,10 @@ impl<Storage: Atomic> CounterFamily<Storage> {
         .zip(values.iter().cloned()),
     );
 
+    #[expect(
+      clippy::expect_used,
+      reason = "label names were validated when the descriptor was built"
+    )]
     let counter = GenericCounter::with_opts(options)
       .expect("counter names and labels were validated at construction");
 
