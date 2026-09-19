@@ -1,6 +1,7 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
 use addr::parse_domain_name;
+use psl2::lookup;
 use url::{Host, Url};
 
 use crate::{config::PathConfig, limits::MAX_PATH_LEN};
@@ -99,7 +100,8 @@ pub fn extract_referrer_domain(
 
   parse_domain_name(&host.hostname)
     .ok()
-    .and_then(|domain| domain.root().map(str::to_owned))
+    .and_then(|domain| lookup(domain.as_str()))
+    .and_then(|domain| domain.registrable_domain().map(str::to_owned))
     .or_else(|| Some("other".to_owned()))
 }
 
