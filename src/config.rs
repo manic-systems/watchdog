@@ -6,10 +6,10 @@ use std::{
 
 use figment::{
   Figment,
-  providers::{Env, Format, Serialized, Toml},
+  providers::{Env, Format, Toml},
 };
 use ipnet::IpNet;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use thiserror::Error;
 /// Errors produced while loading or validating configuration.
 #[derive(Debug, Error)]
@@ -61,7 +61,7 @@ pub enum ConfigError {
 }
 
 /// Complete runtime configuration for a Watchdog instance.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
   pub site:     SiteConfig,
@@ -71,7 +71,7 @@ pub struct Config {
 }
 
 /// Site-specific analytics behavior and collection controls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SiteConfig {
   pub domains:       Vec<String>,
@@ -96,7 +96,7 @@ impl Default for SiteConfig {
 }
 
 /// Salt rotation period used for unique visitor estimates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SaltRotation {
   Daily,
@@ -114,7 +114,7 @@ impl SaltRotation {
 }
 
 /// Feature flags for dimensions and event types collected into metrics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CollectConfig {
   pub pageviews:   bool,
@@ -151,9 +151,7 @@ impl Default for CollectConfig {
 }
 
 /// Referrer detail level retained in Prometheus labels.
-#[derive(
-  Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ReferrerMode {
   Off,
@@ -163,7 +161,7 @@ pub enum ReferrerMode {
 }
 
 /// Path normalization options applied before recording metrics.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PathConfig {
   pub strip_query:               bool,
@@ -186,7 +184,7 @@ impl Default for PathConfig {
 }
 
 /// Cardinality and rate limits used to bound metrics growth.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct LimitsConfig {
   pub max_paths:              usize,
@@ -217,7 +215,7 @@ impl Default for LimitsConfig {
 }
 
 /// Screen-width breakpoints used for device and screen labels.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DeviceBreakpoints {
   pub mobile: u16,
@@ -234,7 +232,7 @@ impl Default for DeviceBreakpoints {
 }
 
 /// Security controls for trusted proxies, CORS, and metrics access.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SecurityConfig {
   pub trusted_proxies: Vec<String>,
@@ -243,7 +241,7 @@ pub struct SecurityConfig {
 }
 
 /// CORS policy for the event ingestion endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct CorsConfig {
   pub enabled:         bool,
@@ -251,7 +249,7 @@ pub struct CorsConfig {
 }
 
 /// Optional HTTP Basic authentication for the metrics endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuthConfig {
   pub enabled:  bool,
@@ -260,7 +258,7 @@ pub struct AuthConfig {
 }
 
 /// HTTP listener, endpoint, and state-file settings.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerConfig {
   pub listen_addr:    String,
@@ -294,7 +292,7 @@ pub fn load(
   path: Option<&Path>,
   overrides: Overrides,
 ) -> Result<Config, ConfigError> {
-  let mut figment = Figment::from(Serialized::defaults(Config::default()));
+  let mut figment = Figment::new();
 
   if let Some(path) = path {
     if !path.exists() {

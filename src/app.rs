@@ -17,9 +17,8 @@ use axum::{
   response::{IntoResponse, Response},
   routing::{get, post},
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use data_encoding::{BASE64, HEXLOWER};
 use ipnet::IpNet;
-use rust_embed::RustEmbed;
 use subtle::ConstantTimeEq;
 use thiserror::Error;
 use tower_http::{
@@ -28,7 +27,6 @@ use tower_http::{
   trace::TraceLayer,
 };
 use url::{Url, form_urlencoded};
-use uuid::Uuid;
 
 use crate::{
   BuildInfo,
@@ -40,10 +38,6 @@ use crate::{
   ratelimit::IpRateLimiter,
   registry::BoundedRegistry,
 };
-#[derive(RustEmbed)]
-#[folder = "web"]
-struct WebAssets;
-
 /// Errors returned while constructing application state or routes.
 #[derive(Debug, Error)]
 pub enum AppError {
@@ -689,7 +683,7 @@ fn metrics_authorized(state: &AppState, headers: &HeaderMap) -> bool {
     return false;
   };
 
-  let Ok(decoded) = BASE64.decode(encoded) else {
+  let Ok(decoded) = BASE64.decode(encoded.as_bytes()) else {
     return false;
   };
   let Ok(credentials) = String::from_utf8(decoded) else {
@@ -734,15 +728,18 @@ async fn static_asset(
     return StatusCode::NOT_FOUND.into_response();
   }
 
-  let Some(asset) = WebAssets::get(&path) else {
-    return StatusCode::NOT_FOUND.into_response();
+  let (content_type, content): (&str, &[u8]) = match path.as_str() {
+    "beacon.js" => ("text/javascript", include_bytes!("../web/beacon.js")),
+    "beacon.test.html" => {
+      ("text/html", include_bytes!("../web/beacon.test.html"))
+    },
+    _ => return StatusCode::NOT_FOUND.into_response(),
   };
 
-  let content_type = mime_guess::from_path(&path).first_or_octet_stream();
   Response::builder()
     .status(StatusCode::OK)
-    .header(header::CONTENT_TYPE, content_type.as_ref())
-    .body(Body::from(asset.data.into_owned()))
+    .header(header::CONTENT_TYPE, content_type)
+    .body(Body::from(content))
     .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
@@ -752,7 +749,7 @@ fn request_id(headers: &HeaderMap) -> String {
     .and_then(|value| value.to_str().ok())
     .filter(|value| !value.is_empty())
     .map(str::to_owned)
-    .unwrap_or_else(|| Uuid::new_v4().simple().to_string())
+    .unwrap_or_else(|| HEXLOWER.encode(&rand::random::<[u8; 16]>()))
 }
 
 fn response_with_request_id(

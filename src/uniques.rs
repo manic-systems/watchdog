@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use cardinality_estimator_safe::{Element, Sketch};
+use data_encoding::HEXLOWER;
 use parking_lot::Mutex;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -197,7 +198,7 @@ fn generate_salt(key: &str) -> String {
   let mut hasher = Sha256::new();
   hasher.update(key.as_bytes());
   hasher.update(bytes);
-  hex::encode(hasher.finalize())
+  HEXLOWER.encode(&hasher.finalize())
 }
 
 fn hash_visitor(ip: &str, user_agent: &str, salt: &str) -> u64 {
