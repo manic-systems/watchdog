@@ -1,26 +1,25 @@
-use std::path::PathBuf;
+use std::{env::args_os, path::PathBuf, process::exit};
 
 use anyhow::Context;
-use clap::Parser;
+use pound::Parse;
 use watchdog::{BuildInfo, config, server};
 
-#[derive(Debug, Parser)]
-#[command(author, version, about, long_about = None)]
+#[derive(Debug, Parse)]
 struct Cli {
   /// Path to the TOML configuration file.
-  #[arg(long)]
+  #[pound(long)]
   config: Option<PathBuf>,
 
   /// Server listen address, overriding configuration.
-  #[arg(long)]
+  #[pound(long)]
   listen_addr: Option<String>,
 
   /// Prometheus metrics endpoint path, overriding configuration.
-  #[arg(long)]
+  #[pound(long)]
   metrics_path: Option<String>,
 
   /// Event ingestion endpoint path, overriding configuration.
-  #[arg(long)]
+  #[pound(long)]
   ingestion_path: Option<String>,
 }
 
@@ -33,7 +32,19 @@ async fn main() -> anyhow::Result<()> {
     )
     .init();
 
-  let cli = Cli::parse();
+  let arguments = args_os()
+    .skip(1)
+    .map(|argument| {
+      argument.into_string().unwrap_or_else(|invalid| {
+        eprintln!(
+          "command-line arguments must be valid UTF-8, got {invalid:?}"
+        );
+        exit(2);
+      })
+    })
+    .collect::<Vec<_>>();
+
+  let cli = Cli::parse_from(arguments.iter().map(String::as_str));
   let overrides = config::Overrides {
     listen_addr:    cli.listen_addr,
     metrics_path:   cli.metrics_path,
