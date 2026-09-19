@@ -49,3 +49,33 @@ split-debuginfo = "unpacked"
 codegen-units = 1
 lto           = "thin"
 strip         = "symbols"
+
+[lints.clippy]
+cargo    = { level = "warn", priority = -1 }
+nursery  = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+
+blanket_clippy_restriction_lints = "allow"
+restriction                      = { level = "warn", priority = -1 }
+
+arbitrary_source_item_ordering  = "allow"
+arithmetic_side_effects         = "allow"
+else_if_without_else            = "allow"
+error_impl_error                = "allow"
+exhaustive_enums                = "allow"
+exhaustive_structs              = "allow"
+implicit_return                 = "allow"
+indexing_slicing                = "allow"
+integer_division                = "allow"
+integer_division_remainder_used = "allow"
+missing_trait_methods           = "allow"
+module_name_repetitions         = "allow"
+multiple_crate_versions         = "allow"
+pub_with_shorthand              = "allow"
+question_mark_used              = "allow"
+ref_patterns                    = "allow"
+separated_literal_suffix        = "allow"
+single_call_fn                  = "allow"
+std_instead_of_alloc            = "allow"
+std_instead_of_core             = "allow"
+tests_outside_test_module       = "allow"
