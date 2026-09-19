@@ -19,7 +19,7 @@ use prometheus::{
 
 use crate::{
   BuildInfo,
-  config::{CollectConfig, Config, ReferrerMode},
+  config::{CollectConfig, Config, ReferrerMode, SaltRotation},
   counters::CounterFamily,
   limits::MAX_METRICS_RESPONSE_SIZE,
   uniques::UniquesEstimator,
@@ -78,7 +78,7 @@ pub struct Metrics {
   /// Embedded asset requests blocked by security filters.
   blocked_requests:   CounterFamily<AtomicU64>,
   /// Estimated unique visitors for the current salt period.
-  daily_uniques:      Gauge,
+  unique_visitors:    Gauge,
   /// Ordered label names matching dimension value order.
   label_names:        Vec<&'static str>,
   /// Collection flags selecting exported dimensions.
@@ -194,10 +194,23 @@ impl Metrics {
       ),
       &["reason"],
     )?;
-    let daily_uniques = Gauge::with_opts(Opts::new(
-      "web_daily_unique_visitors",
-      "Estimated unique visitors for the current salt period",
-    ))?;
+    let (unique_metric_name, unique_metric_help) =
+      match config.site.salt_rotation {
+        Some(SaltRotation::Hourly) => {
+          (
+            "web_hourly_unique_visitors",
+            "Estimated unique visitors for the current hour",
+          )
+        },
+        Some(SaltRotation::Daily) | None => {
+          (
+            "web_daily_unique_visitors",
+            "Estimated unique visitors for the current day",
+          )
+        },
+      };
+    let unique_visitors =
+      Gauge::with_opts(Opts::new(unique_metric_name, unique_metric_help))?;
 
     let build_info_metric = Gauge::with_opts(
       Opts::new(
@@ -236,7 +249,7 @@ impl Metrics {
       Box::new(event_overflow.clone()),
       Box::new(dimension_overflow.clone()),
       Box::new(blocked_requests.clone()),
-      Box::new(daily_uniques.clone()),
+      Box::new(unique_visitors.clone()),
       Box::new(build_info_metric),
       Box::new(start_time),
     ];
@@ -263,7 +276,7 @@ impl Metrics {
       event_overflow,
       dimension_overflow,
       blocked_requests,
-      daily_uniques,
+      unique_visitors,
       label_names,
       collect: config.site.collect.clone(),
       uniques: config
@@ -406,7 +419,7 @@ impl Metrics {
   #[inline]
   pub fn update_unique_gauge(&self) {
     if let Some(uniques) = self.uniques.as_ref() {
-      self.daily_uniques.set(uniques.estimate());
+      self.unique_visitors.set(uniques.estimate());
     }
   }
 
@@ -673,6 +686,24 @@ mod tests {
     assert!(body.contains("event=\"signup\""));
     assert!(body.contains("depth=\"75\""));
     assert!(body.contains("key=\"tier\",value=\"paid\""));
+    Ok(())
+  }
+
+  #[test]
+  #[expect(
+    clippy::panic_in_result_fn,
+    reason = "assertions define the metric naming contract"
+  )]
+  fn names_unique_metric_for_hourly_rotation() -> Result<()> {
+    let mut config = Config::default();
+    config.site.domains = vec!["example.com".to_owned()];
+    config.site.salt_rotation = Some(SaltRotation::Hourly);
+    config.validate()?;
+    let metrics = Metrics::new(&config, &BuildInfo::current())?;
+
+    let body = metrics.encode()?;
+    assert!(body.contains("web_hourly_unique_visitors"));
+    assert!(!body.contains("web_daily_unique_visitors"));
     Ok(())
   }
 }

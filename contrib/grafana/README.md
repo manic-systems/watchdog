@@ -91,8 +91,10 @@ The dashboard includes three template variables for flexible filtering:
 All metrics aggregated using `sum()` across selected instances:
 
 ```promql
-# Total unique visitors
+# Total unique visitors with the default daily rotation
 sum(web_daily_unique_visitors{instance=~"$instance",domain=~"$domain"})
+
+# Use web_hourly_unique_visitors instead when salt_rotation is hourly.
 
 # Pageview rate
 sum(rate(web_pageviews_total{instance=~"$instance",domain=~"$domain"}[$__rate_interval])) * 60
