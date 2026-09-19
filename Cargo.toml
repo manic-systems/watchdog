@@ -5,6 +5,9 @@ version      = "1.0.0"
 edition      = "2024"
 rust-version = "1.95.0"
 license      = "EUPL-1.2"
+categories   = [ "network-programming", "web-programming" ]
+keywords     = [ "analytics", "metrics", "privacy", "prometheus", "web" ]
+repository   = "https://github.com/manic-systems/watchdog"
 
 [dependencies]
 addr                       = { version = "0.15.6", default-features = false, features = [ "std" ] }
