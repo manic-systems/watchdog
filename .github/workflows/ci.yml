@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  checks:
+    name: Checks
+    uses: manic-systems/workflows/.github/workflows/rust-checks.yml@b22b11dd6ae5da25aa9c82fcba380b05003af2dd # v2.1.2
+    with:
+      os: ubuntu-latest
+      flake-check: false
+      fmt: true
+      clippy: true
+      clippy-command: cargo clippy --locked --all-targets -- -D warnings
+      test: true
+      test-command: cargo test --locked --all-targets
+
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-26.04-arm]
+    permissions:
+      actions: write
+      contents: read
+    uses: manic-systems/workflows/.github/workflows/nix-checks.yml@b22b11dd6ae5da25aa9c82fcba380b05003af2dd # v2.1.2
+    with:
+      os: ${{ matrix.os }}
+      flake-check: false
+      build: true
+      build-command: nix build -L --no-link
+      cache: true
+      cache-save: true
+
+  deny:
+    name: Dependency Audit
+    uses: manic-systems/workflows/.github/workflows/rust-audit.yml@b22b11dd6ae5da25aa9c82fcba380b05003af2dd # v2.1.2
+    with:
+      install-nix: true
+      audit-command: nix develop --command cargo deny --locked check
+
+  actions:
+    name: Actions Lint
+    uses: manic-systems/workflows/.github/workflows/actions-lint.yml@b22b11dd6ae5da25aa9c82fcba380b05003af2dd # v2.1.2
