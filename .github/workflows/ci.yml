@@ -17,7 +17,7 @@ concurrency:
 jobs:
   checks:
     name: Checks
-    uses: manic-systems/workflows/.github/workflows/rust-checks.yml@b22b11dd6ae5da25aa9c82fcba380b05003af2dd # v2.1.2
+    uses: manic-systems/workflows/.github/workflows/rust-checks.yml@d93951cf50722594dc1d64602eb9453dc7da2fb6 # v2.3.0
     with:
       os: ubuntu-latest
       flake-check: false
@@ -36,7 +36,7 @@ jobs:
     permissions:
       actions: write
       contents: read
-    uses: manic-systems/workflows/.github/workflows/nix-checks.yml@b22b11dd6ae5da25aa9c82fcba380b05003af2dd # v2.1.2
+    uses: manic-systems/workflows/.github/workflows/nix-checks.yml@d93951cf50722594dc1d64602eb9453dc7da2fb6 # v2.3.0
     with:
       os: ${{ matrix.os }}
       flake-check: false
@@ -47,14 +47,14 @@ jobs:
 
   deny:
     name: Dependency Audit
-    uses: manic-systems/workflows/.github/workflows/rust-audit.yml@b22b11dd6ae5da25aa9c82fcba380b05003af2dd # v2.1.2
+    uses: manic-systems/workflows/.github/workflows/rust-audit.yml@d93951cf50722594dc1d64602eb9453dc7da2fb6 # v2.3.0
     with:
       install-nix: true
       audit-command: nix develop --command cargo deny --locked check
 
   actions:
     name: Actions Lint
-    uses: manic-systems/workflows/.github/workflows/actions-lint.yml@b22b11dd6ae5da25aa9c82fcba380b05003af2dd # v2.1.2
+    uses: manic-systems/workflows/.github/workflows/actions-lint.yml@d93951cf50722594dc1d64602eb9453dc7da2fb6 # v2.3.0
 
   required:
     name: Required Checks
