@@ -302,11 +302,6 @@ mod tests {
 
   use super::*;
 
-  #[expect(
-    clippy::float_cmp,
-    reason = "same estimator must return identical estimate for repeated \
-              observation"
-  )]
   #[test]
   fn estimates_unique_visitors() {
     let estimator = UniquesEstimator::new(SaltRotation::Daily);

@@ -628,7 +628,8 @@ mod tests {
     config.server.ingestion_path = "/web/beacon.js".to_owned();
     assert!(matches!(
       config.validate(),
-      Err(ConfigError::ReservedServerPath { .. })
+      Err(ConfigError::ReservedServerPath { field: "ingestion_path", path })
+        if path == "/web/beacon.js"
     ));
   }
 
@@ -692,7 +693,9 @@ mod tests {
     config.server.metrics_path = "/metrics/{id}".to_owned();
     assert!(matches!(
       config.validate(),
-      Err(ConfigError::InvalidServerPathChars { .. })
+      Err(ConfigError::InvalidServerPathChars {
+        field: "metrics_path",
+      })
     ));
   }
 
