@@ -1,7 +1,9 @@
 {
+  self,
   lib,
   rustPlatform,
-  self,
+  pkg-config,
+  libgit2,
 }: let
   cargoToml = lib.importTOML ../Cargo.toml;
 in
@@ -23,6 +25,9 @@ in
           (s + /Cargo.lock)
         ];
       };
+
+    buildInputs = [libgit2.dev];
+    nativeBuildInputs = [pkg-config];
 
     useNextest = true;
     cargoLock.lockFile = "${finalAttrs.src}/Cargo.lock";
