@@ -1,4 +1,4 @@
-use std::{env::args_os, path::PathBuf, process::exit};
+use std::path::PathBuf;
 
 use misstep::{Result, ResultExt as _};
 use pound::Parse;
@@ -33,24 +33,7 @@ async fn main() -> Result<()> {
     )
     .init();
 
-  let arguments = args_os()
-    .skip(1)
-    .map(|argument| {
-      #[expect(
-        clippy::print_stderr,
-        reason = "CLI must report invalid arguments before logging exists"
-      )]
-      argument.into_string().unwrap_or_else(|invalid| {
-        eprintln!(
-          "command-line arguments must be valid UTF-8, got {}",
-          invalid.display()
-        );
-        exit(2);
-      })
-    })
-    .collect::<Vec<_>>();
-
-  let cli = Cli::parse_from(arguments.iter().map(String::as_str));
+  let cli = Cli::parse();
   let overrides = config::Overrides {
     listen_addr:    cli.listen_addr,
     metrics_path:   cli.metrics_path,
