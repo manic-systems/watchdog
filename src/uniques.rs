@@ -5,12 +5,12 @@ use std::{
 
 use cardinality_estimator_safe::{Element, Sketch};
 use data_encoding::HEXLOWER;
+use flub::Error;
 use hmac_sha256::Hash as Sha256;
 use jiff::{Timestamp, tz::Offset};
 use parking_lot::Mutex;
 use rand::Rng as _;
 use serde::{Deserialize, Serialize};
-use thiserror::Error;
 use tokio::fs;
 
 use crate::config::SaltRotation;

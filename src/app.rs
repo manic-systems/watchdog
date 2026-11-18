@@ -18,9 +18,9 @@ use axum::{
   routing::{get, post},
 };
 use data_encoding::{BASE64, HEXLOWER};
+use flub::Error;
 use ipnet::IpNet;
 use subtle::ConstantTimeEq as _;
-use thiserror::Error;
 use tower_http::{
   cors::{Any, CorsLayer},
   timeout::TimeoutLayer,

@@ -231,6 +231,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "flub"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8dafd7b8315f0512f6cc3ce477bd02462188dabf194c678d3bb8dd803a20db27"
+dependencies = [
+ "flub-derive",
+]
+
+[[package]]
+name = "flub-derive"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0c21917c538f4d0ad7e7e0019ed0ce3a287c0573a29ced48fbc641cf93ae245"
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1557,6 +1572,7 @@ dependencies = [
  "cardinality-estimator-safe",
  "data-encoding",
  "figment",
+ "flub",
  "hmac-sha256",
  "hyper",
  "hyper-util",
@@ -1572,7 +1588,6 @@ dependencies = [
  "serde_json",
  "subtle",
  "tempfile",
- "thiserror",
  "tokio",
  "tokio-io-timeout",
  "tokio-util",

@@ -8,9 +8,9 @@ use figment::{
   Figment,
   providers::{Env, Format},
 };
+use flub::Error;
 use ipnet::IpNet;
 use serde::{Deserialize, de::DeserializeOwned};
-use thiserror::Error;
 use toml::de::Error as TomlError;
 /// Errors produced while loading or validating configuration.
 #[derive(Debug, Error)]

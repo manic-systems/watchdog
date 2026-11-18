@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
+use flub::Error;
 use serde::Deserialize;
-use thiserror::Error;
 use url::Url;
 
 use crate::limits::{

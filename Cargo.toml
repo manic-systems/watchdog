@@ -16,6 +16,7 @@ axum                       = { version = "0.8.9", default-features = false, feat
 cardinality-estimator-safe = { version = "4.0.3", features = [ "with_serde" ] }
 data-encoding              = "2.11.1"
 figment                    = { version = "0.10.19", features = [ "env" ] }
+flub                       = "0.1.0"
 hmac-sha256                = "1.1.15"
 hyper                      = { version = "1.12.0", features = [ "http1", "server" ] }
 hyper-util                 = { version = "0.1.21", features = [ "service", "tokio" ] }
@@ -29,7 +30,6 @@ psl2                       = { version = "0.1.45", default-features = false }
 rand                       = "0.10.4"
 serde                      = { version = "1.0.229", features = [ "derive" ] }
 subtle                     = "2.6.1"
-thiserror                  = "2.0.21"
 tokio                      = { version = "1.54.1", features = [ "fs", "macros", "net", "rt-multi-thread", "signal", "time" ] }
 tokio-io-timeout           = "1.2.1"
 tokio-util                 = { version = "0.7.20", features = [ "rt" ] }
