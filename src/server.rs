@@ -1,12 +1,12 @@
 use std::net::SocketAddr;
 
-use anyhow::Context as _;
 use axum::{Extension, Router, extract::ConnectInfo, serve::Listener};
 use hyper::server::conn::http1::Builder;
 use hyper_util::{
   rt::{TokioIo, TokioTimer},
   service::TowerToHyperService,
 };
+use misstep::{Result, ResultExt as _};
 #[cfg(unix)] use tokio::signal::unix::{SignalKind, signal};
 use tokio::{
   net::{TcpListener, TcpStream},
@@ -38,7 +38,7 @@ use crate::{
 /// Returns an error when the listen address is invalid, the socket cannot be
 /// bound, or persisted visitor state cannot be saved.
 #[inline]
-pub async fn run(config: Config, build_info: BuildInfo) -> anyhow::Result<()> {
+pub async fn run(config: Config, build_info: BuildInfo) -> Result<()> {
   info!(domains = ?config.site.domains, "loaded configuration");
 
   let state = AppState::new(config, build_info)
@@ -48,11 +48,11 @@ pub async fn run(config: Config, build_info: BuildInfo) -> anyhow::Result<()> {
   }
 
   let app = app::router(state.clone()).context("failed to build router")?;
-  let listen_addr: SocketAddr = state
+  let listen_addr = state
     .config()
     .server
     .listen_addr
-    .parse()
+    .parse::<SocketAddr>()
     .context("server.listen_addr must be a socket address")?;
   let mut listener = TcpListener::bind(listen_addr)
     .await

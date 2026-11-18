@@ -625,7 +625,7 @@ pub fn sanitize_label(label: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-  use anyhow::Result;
+  use misstep::Result;
 
   use super::*;
   use crate::config::Config;

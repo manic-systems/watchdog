@@ -707,6 +707,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "misstep"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54945ebe59d50ffb617d2381f24f2456dd71aa900b0f5a5068d0d67c05b1ed44"
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1567,7 +1573,6 @@ name = "watchdog"
 version = "2.0.1"
 dependencies = [
  "addr",
- "anyhow",
  "axum",
  "cardinality-estimator-safe",
  "data-encoding",
@@ -1578,6 +1583,7 @@ dependencies = [
  "hyper-util",
  "ipnet",
  "jiff",
+ "misstep",
  "parking_lot 0.13.0",
  "postcard",
  "pound",

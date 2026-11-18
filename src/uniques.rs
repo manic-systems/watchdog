@@ -298,7 +298,7 @@ fn hash_visitor(ip: &str, user_agent: &str, salt: &str) -> u64 {
 }
 #[cfg(test)]
 mod tests {
-  use anyhow::Result;
+  use misstep::Result;
 
   use super::*;
 

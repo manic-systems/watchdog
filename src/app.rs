@@ -1128,7 +1128,7 @@ fn validate_asset_path(path: &str) -> Result<(), &'static str> {
 
 #[cfg(test)]
 mod tests {
-  use anyhow::Result;
+  use misstep::Result;
 
   use super::*;
   use crate::config::Config;

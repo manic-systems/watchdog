@@ -564,7 +564,7 @@ fn validate_reserved_endpoint_path(
 mod tests {
   use std::fs;
 
-  use anyhow::Result;
+  use misstep::Result;
 
   use super::*;
 

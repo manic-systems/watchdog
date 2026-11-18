@@ -1,6 +1,6 @@
 use std::{env::args_os, path::PathBuf, process::exit};
 
-use anyhow::Context as _;
+use misstep::{Result, ResultExt as _};
 use pound::Parse;
 use watchdog::{BuildInfo, config, server};
 
@@ -25,7 +25,7 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
   tracing_subscriber::fmt()
     .with_env_filter(
       tracing_subscriber::EnvFilter::try_from_default_env()
